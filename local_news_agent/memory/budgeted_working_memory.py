@@ -23,11 +23,12 @@ ALPHA_MAP: dict[Timescale, float] = {
 
 @dataclass
 class ConceptNode:
-    """Atomic node in the working memory concept graph."""
+    """Atomic node in the working memory concept graph with Concept-Importance-governed decay."""
     id: str
     text: str
     category: str
     timescale: Timescale = Timescale.SHORT
+    importance: float = 1.0  # Concept Importance I(c)
     created_step: int = 0
     last_accessed_step: int = 0
     access_count: int = 1
@@ -39,15 +40,20 @@ class ConceptNode:
             self.base_alpha = ALPHA_MAP.get(self.timescale, 0.20)
 
     def retention(self, current_step: int, pressure: float = 0.0, beta: float = 0.8) -> float:
-        """Compute learned retention score under multi-timescale decay and reinforcement.
+        """Compute learned retention score governed by Concept Importance I(c).
 
-        Formula (from Monograph Section 6, 7 & 8):
-            alpha' = alpha * (1 + 0.5 * pressure)
-            R(Delta t) = exp(-alpha' * Delta t) + beta * min(1.0, 0.25 * access_count)
+        Decay is a direct function of Concept Importance:
+            effective_alpha = (base_alpha / max(0.1, self.importance)) * (1.0 + 0.5 * max(0.0, pressure))
+            R(c, Delta t) = importance * exp(-effective_alpha * Delta t) + beta * min(1.0, 0.25 * access_count)
+
+        - High Concept Importance (I(c) >> 1, e.g. confirmed facts, primary evidence):
+          effective_alpha -> 0.0, decay is strongly dampened, concept persists in memory.
+        - Low Concept Importance (I(c) -> 0, e.g. ephemeral search scraps):
+          effective_alpha is high, concept decays rapidly and gets evicted during consolidation.
         """
-        effective_alpha = self.base_alpha * (1.0 + 0.5 * max(0.0, pressure))
+        effective_alpha = (self.base_alpha / max(0.1, self.importance)) * (1.0 + 0.5 * max(0.0, pressure))
         delta_t = max(0, current_step - self.last_accessed_step)
-        decay = math.exp(-effective_alpha * delta_t)
+        decay = self.importance * math.exp(-effective_alpha * delta_t)
         reinforcement = beta * min(1.0, 0.25 * self.access_count)
         return decay + reinforcement
 
@@ -55,6 +61,8 @@ class ConceptNode:
         """Reinforce memory retention upon retrieval or verification."""
         self.last_accessed_step = current_step
         self.access_count += weight
+        self.importance += 0.25 * weight
+
 
 
 class ConceptGraph:
@@ -128,6 +136,7 @@ class BudgetedWorkingMemory:
                 text=f"{title}: {snippet[:180]}",
                 category="search_result",
                 timescale=Timescale.SHORT,
+                importance=0.6,
                 created_step=self.current_step,
                 last_accessed_step=self.current_step,
                 metadata={"url": url, "title": title},
@@ -148,6 +157,7 @@ class BudgetedWorkingMemory:
                 text=f"{headline} - {event[:200]}",
                 category="story_candidate",
                 timescale=Timescale.MEDIUM,
+                importance=max(1.0, float(confidence) * 1.5),
                 created_step=self.current_step,
                 last_accessed_step=self.current_step,
                 metadata={"headline": headline, "confidence": confidence, "sources": sources},
@@ -167,6 +177,7 @@ class BudgetedWorkingMemory:
             text=fact[:250],
             category="confirmed_fact",
             timescale=Timescale.LONG,
+            importance=2.5,
             created_step=self.current_step,
             last_accessed_step=self.current_step,
             access_count=3,
@@ -183,7 +194,9 @@ class BudgetedWorkingMemory:
             if headline.lower() in node.text.lower():
                 node.timescale = Timescale.LONG
                 node.base_alpha = ALPHA_MAP[Timescale.LONG]
+                node.importance += 1.5
                 self.graph.reinforce(node.id, self.current_step, weight=4)
+
 
     def _link_related_nodes(self, new_node: ConceptNode) -> None:
         """Build graph edges based on shared semantic terms."""

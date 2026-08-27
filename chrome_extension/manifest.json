@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Local News Agent - Codex Chrome Bridge",
+  "version": "1.3.0",
+  "description": "Local bridge for autonomous web search, page extraction, verified X/Threads posting, and private YouTube Shorts uploads.",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "activeTab",
+    "alarms",
+    "offscreen",
+    "debugger"
+  ],
+  "host_permissions": [
+    "https://x.com/*",
+    "https://*.threads.com/*",
+    "https://studio.youtube.com/*",
+    "https://www.youtube.com/*",
+    "https://news.google.com/*",
+    "https://www.google.com/*",
+    "http://127.0.0.1/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Local News Agent Bridge (Connected)"
+  }
+}

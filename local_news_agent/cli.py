@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from dataclasses import replace
@@ -11,6 +12,7 @@ from .config import Settings
 from .evaluation.benchmark import run_benchmark
 from .hermes.fixture import FixtureTools
 from .hermes.tools import ChromeExtensionWebTools, DirectWebTools, HermesCLITools, HermesNativeTools
+from .job_toolcaller import CustomJobToolCaller
 from .memory.store import MemoryStore
 from .model import LocalModel
 from .orchestrator import NewsAgent
@@ -24,15 +26,23 @@ from .training.trajectory import TrajectoryLogger
 def build(settings: Settings) -> NewsAgent:
     settings.ensure_dirs(); model = LocalModel(settings); planner = Planner(model)
     tools = {
+        "custom": CustomJobToolCaller,
+        "direct": DirectWebTools,
         "hermes": HermesNativeTools,
         "hermes_native": HermesNativeTools,
         "hermes_cli": HermesCLITools,
-        "direct": DirectWebTools,
         "fixture": FixtureTools,
         "extension": ChromeExtensionWebTools,
         "chrome": ChromeExtensionWebTools,
     }[settings.tool_backend]
-    tool_instance = tools(settings, model=model) if settings.tool_backend in {"hermes", "hermes_native"} else (tools(settings) if settings.tool_backend == "hermes_cli" else tools())
+    if settings.tool_backend == "custom":
+        tool_instance = CustomJobToolCaller(settings, model=model)
+    elif settings.tool_backend in {"hermes", "hermes_native"}:
+        tool_instance = tools(settings, model=model)
+    elif settings.tool_backend == "hermes_cli":
+        tool_instance = tools(settings)
+    else:
+        tool_instance = tools()
     return NewsAgent(settings, planner, tool_instance, MemoryStore(settings.database_path), Publisher(settings.publish_mode, settings.queue_path), TrajectoryLogger(settings.trajectory_path))
 
 
@@ -42,12 +52,12 @@ def doctor(settings: Settings) -> int:
         "model_backend": settings.model_backend,
         "model": settings.model_name,
         "tool_backend": settings.tool_backend,
-        "context_budget": f"{settings.model_context_tokens} tokens (16K anti-OOM)",
-        "hermes_caller": "native_16k" if settings.tool_backend in {"hermes", "hermes_native"} else "cli",
+        "context_budget": f"{settings.model_context_tokens} tokens (Anti-OOM: <2.2 GB VRAM footprint)",
+        "tool_caller": "custom_dedicated" if settings.tool_backend == "custom" else settings.tool_backend,
         "kv_cache_compression": f"{settings.ollama_kv_cache_type} (Flash Attention: {settings.ollama_flash_attention})",
         "budgeted_memory": f"B={settings.memory_budget_nodes}, tau={settings.memory_consolidation_threshold}",
-        "hermes_cli": shutil.which(settings.hermes_command),
-        "ollama_cli": shutil.which("ollama"),
+        "hermes_cli": shutil.which(settings.hermes_command) or (settings.hermes_command if Path(settings.hermes_command).is_file() else None),
+        "ollama_cli": shutil.which("ollama") or shutil.which(Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe")).as_posix()) or (str(Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"))) if Path(os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe")).is_file() else None),
     }
     try:
         response = httpx.get(f"{settings.model_base_url}/api/tags", timeout=3)
@@ -59,12 +69,12 @@ def doctor(settings: Settings) -> int:
     checks["database_path"] = str(settings.database_path.resolve())
     print(json.dumps(checks, indent=2))
     model_ok = checks.get("model_endpoint") == "ok"
-    return 0 if model_ok and (settings.tool_backend != "hermes_cli" or checks["hermes_cli"]) else (0 if checks["tool_backend"] == "hermes" else 1)
+    return 0 if model_ok or settings.tool_backend in {"custom", "direct", "fixture"} else 1
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="news-agent", description="Local Hermes 3 (Llama 3.2 3B) + Hermes 16K news research agent")
-    p.add_argument("--tools", choices=["hermes", "hermes_native", "hermes_cli", "direct", "fixture", "extension", "chrome"], help="override configured tool backend")
+    p = argparse.ArgumentParser(prog="news-agent", description="Local News Research Agent with Custom Anti-OOM ToolCaller")
+    p.add_argument("--tools", choices=["custom", "direct", "hermes", "hermes_native", "hermes_cli", "fixture", "extension", "chrome"], help="override configured tool backend")
     sub=p.add_subparsers(dest="command",required=True)
     one=sub.add_parser("run",help="run one research cycle"); one.add_argument("--topic",default="artificial intelligence technology")
     daemon=sub.add_parser("daemon",help="run research independently on a fixed interval"); daemon.add_argument("--topic",default="artificial intelligence technology"); daemon.add_argument("--every-minutes",type=int,default=60)

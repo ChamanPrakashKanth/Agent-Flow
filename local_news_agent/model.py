@@ -46,14 +46,17 @@ class LocalModel:
                 os.environ["OLLAMA_KV_CACHE_TYPE"] = self.s.ollama_kv_cache_type
 
     def chat_messages(self, messages: list[dict[str, Any]], json_mode: bool = False, temperature: float = 0.1) -> ModelReply:
+        max_gen = min(512, max(128, self.s.model_context_tokens // 2))
         if self.s.model_backend == "ollama":
             payload = {
                 "model": self.s.model_name,
                 "stream": False,
                 "messages": messages,
+                "keep_alive": "5m",
                 "options": {
                     "temperature": temperature,
                     "num_ctx": self.s.model_context_tokens,
+                    "num_predict": max_gen,
                 },
             }
             if json_mode:
@@ -74,7 +77,7 @@ class LocalModel:
             "model": self.s.model_name,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": 4096,
+            "max_tokens": max_gen,
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
@@ -85,6 +88,20 @@ class LocalModel:
         prompt_tokens = usage.get("prompt_tokens") or count_messages_tokens(messages)
         completion_tokens = usage.get("completion_tokens", 0)
         return ModelReply(data["choices"][0]["message"]["content"], prompt_tokens, completion_tokens)
+
+    def unload_model(self) -> bool:
+        """Proactively unload model from Ollama VRAM to free GPU memory."""
+        if self.s.model_backend != "ollama":
+            return True
+        try:
+            httpx.post(
+                f"{self.s.model_base_url}/api/generate",
+                json={"model": self.s.model_name, "keep_alive": 0},
+                timeout=5,
+            )
+            return True
+        except Exception:
+            return False
 
     def chat(self, system: str, user: str, json_mode: bool = False, temperature: float = 0.1) -> ModelReply:
         messages = [

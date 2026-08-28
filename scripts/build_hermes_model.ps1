@@ -4,8 +4,11 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 # Configure low-memory KV cache quantization and Flash Attention for Hermes 3 Llama 3.2 3B
 $env:OLLAMA_FLASH_ATTENTION = '1'
 $env:OLLAMA_KV_CACHE_TYPE = 'q4_0'
+$env:OLLAMA_NUM_PARALLEL = '1'
+$env:OLLAMA_MAX_LOADED_MODELS = '1'
+$env:OLLAMA_KEEP_ALIVE = '5m'
 
-Write-Host "=== PREPARING HERMES 3 (LLAMA 3.2 3B) WITH KV CACHE COMPRESSION ===" -ForegroundColor Cyan
+Write-Host "=== PREPARING HERMES 3 (LLAMA 3.2 3B) WITH ANTI-OOM 2K CONTEXT & KV CACHE COMPRESSION ===" -ForegroundColor Cyan
 
 # Locate Ollama executable
 $ollamaExe = $null
@@ -33,11 +36,11 @@ if (-not $ollamaExe) {
 Write-Host "[1/3] Pulling base model: hermes3:3b..." -ForegroundColor Yellow
 & $ollamaExe pull hermes3:3b
 
-Write-Host "[2/3] Building extended 64k context model for Hermes publisher from config/Modelfile.hermes..." -ForegroundColor Yellow
+Write-Host "[2/3] Building bounded 2k context model for Hermes from config/Modelfile.hermes..." -ForegroundColor Yellow
 $modelfile = Join-Path $projectRoot "config\Modelfile.hermes"
 & $ollamaExe create hermes3:3b-hermes -f $modelfile
 
 Write-Host "[3/3] Verifying Ollama models..." -ForegroundColor Yellow
 & $ollamaExe list
 
-Write-Host "`n[SUCCESS] Hermes 3 (Llama 3.2 3B) ready with q4_0 KV cache compression and Flash Attention!" -ForegroundColor Green
+Write-Host "`n[SUCCESS] Hermes 3 (Llama 3.2 3B) ready with 2k bounded context, q4_0 KV cache compression, and Flash Attention!" -ForegroundColor Green

@@ -5,10 +5,12 @@ $logDirectory = Join-Path $projectRoot 'logs'
 $logFile = Join-Path $logDirectory 'autostart.log'
 $automationWorker = Join-Path $PSScriptRoot 'automation_on_startup.ps1'
 
-# Hermes requires a 64K context. Quantized KV cache keeps the local Hermes 3 (Llama 3.2 3B)
-# publishing model within this PC's memory budget.
+# Low-memory Ollama optimization profile for 4GB VRAM (GTX 1650) / 6GB RAM
 $env:OLLAMA_FLASH_ATTENTION = '1'
 $env:OLLAMA_KV_CACHE_TYPE = 'q4_0'
+$env:OLLAMA_NUM_PARALLEL = '1'
+$env:OLLAMA_MAX_LOADED_MODELS = '1'
+$env:OLLAMA_KEEP_ALIVE = '5m'
 
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 Set-Location -LiteralPath $projectRoot

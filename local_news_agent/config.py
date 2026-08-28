@@ -12,8 +12,8 @@ class Settings:
     model_name: str = "hermes3:3b"
     model_base_url: str = "http://127.0.0.1:11434"
     model_api_key: str = ""
-    model_context_tokens: int = 16384
-    tool_backend: str = "hermes"
+    model_context_tokens: int = 2048
+    tool_backend: str = "custom"
     hermes_command: str = "hermes"
     hermes_model: str = "hermes3:3b-hermes"
     hermes_timeout_seconds: int = 300
@@ -27,7 +27,7 @@ class Settings:
     max_searches: int = 5
     max_page_reads: int = 8
     max_retries: int = 2
-    max_observation_chars: int = 3500
+    max_observation_chars: int = 1500
     database_path: Path = Path("data/news_agent.db")
     queue_path: Path = Path("data/review_queue.jsonl")
     trajectory_path: Path = Path("logs/trajectories.jsonl")
@@ -48,8 +48,8 @@ class Settings:
         return cls(
             model_backend=val("MODEL_BACKEND", "ollama"), model_name=val("MODEL_NAME", "hermes3:3b"),
             model_base_url=val("MODEL_BASE_URL", "http://127.0.0.1:11434").rstrip("/"),
-            model_api_key=val("MODEL_API_KEY", ""), model_context_tokens=int(val("MODEL_CONTEXT_TOKENS", "16384")),
-            tool_backend=val("TOOL_BACKEND", "hermes"), hermes_command=val("HERMES_COMMAND", "hermes"),
+            model_api_key=val("MODEL_API_KEY", ""), model_context_tokens=int(val("MODEL_CONTEXT_TOKENS", "2048")),
+            tool_backend=val("TOOL_BACKEND", "custom"), hermes_command=val("HERMES_COMMAND", "hermes"),
             hermes_model=val("HERMES_MODEL", "hermes3:3b-hermes"),
             hermes_timeout_seconds=int(val("HERMES_TIMEOUT_SECONDS", "300")), publish_mode=val("PUBLISH_MODE", "REVIEW").upper(),
             x_profile_url=val("X_PROFILE_URL", "https://x.com/ChamanKant44703"),
@@ -57,7 +57,7 @@ class Settings:
             daily_publish_limit=int(val("DAILY_PUBLISH_LIMIT", "3")), min_importance=float(val("MIN_IMPORTANCE", ".62")),
             min_confidence=float(val("MIN_CONFIDENCE", ".70")), max_iterations=int(val("MAX_ITERATIONS", "24")),
             max_searches=int(val("MAX_SEARCHES", "5")), max_page_reads=int(val("MAX_PAGE_READS", "8")),
-            max_retries=int(val("MAX_RETRIES", "2")), max_observation_chars=int(val("MAX_OBSERVATION_CHARS", "3500")),
+            max_retries=int(val("MAX_RETRIES", "2")), max_observation_chars=int(val("MAX_OBSERVATION_CHARS", "1500")),
             database_path=Path(val("DATABASE_PATH", "data/news_agent.db")), queue_path=Path(val("QUEUE_PATH", "data/review_queue.jsonl")),
             trajectory_path=Path(val("TRAJECTORY_PATH", "logs/trajectories.jsonl")),
             pexels_api_key=val("PEXELS_API_KEY", ""),

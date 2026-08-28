@@ -139,8 +139,18 @@ $synth.Dispose()
         output_clip.parent.mkdir(parents=True, exist_ok=True)
         # Scale to fill 1080x1920 and center crop, no subtitles
         vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30"
-        for vcodec in ("h264_nvenc", "libx264", "mpeg4"):
+        for vcodec in ("libx264", "mpeg4"):
             cmd = [
+                "ffmpeg", "-y",
+                "-i", str(clip_path),
+                "-t", str(duration),
+                "-vf", vf,
+                "-an",
+                "-c:v", vcodec,
+                "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p",
+                str(output_clip),
+            ] if vcodec == "libx264" else [
                 "ffmpeg", "-y",
                 "-i", str(clip_path),
                 "-t", str(duration),
@@ -162,8 +172,16 @@ $synth.Dispose()
         """Generate a sleek, dynamic gradient 1080x1920 background without any subtitles or text."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
         vf = "color=c=0x111827:s=1080x1920:r=30"
-        for vcodec in ("h264_nvenc", "libx264", "mpeg4"):
+        for vcodec in ("libx264", "mpeg4"):
             cmd = [
+                "ffmpeg", "-y",
+                "-f", "lavfi", "-i", vf,
+                "-t", str(duration),
+                "-c:v", vcodec,
+                "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p",
+                str(output_path),
+            ] if vcodec == "libx264" else [
                 "ffmpeg", "-y",
                 "-f", "lavfi", "-i", vf,
                 "-t", str(duration),
@@ -217,8 +235,19 @@ $synth.Dispose()
                             break
 
             # Final render: stitch video + voiceover audio (no subtitles, pure clean video)
-            for vcodec in ("h264_nvenc", "libx264", "mpeg4"):
+            for vcodec in ("libx264", "mpeg4"):
                 cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "concat", "-safe", "0", "-i", str(concat_file),
+                    "-i", str(audio_path),
+                    "-c:v", vcodec,
+                    "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-shortest",
+                    str(output_video),
+                ] if vcodec == "libx264" else [
                     "ffmpeg", "-y",
                     "-f", "concat", "-safe", "0", "-i", str(concat_file),
                     "-i", str(audio_path),

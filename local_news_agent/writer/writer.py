@@ -17,26 +17,27 @@ Never put evidence URLs in prose."""
 
 
 def write(model: LocalModel, story: Story, token_sink=None) -> Draft:
-    payload = {"headline": story.headline, "event": story.event, "verified_facts": story.key_facts[:8], "sources": story.sources}
+    facts = story.key_facts[:8] if story.key_facts else [story.event or story.headline]
+    payload = {"headline": story.headline, "event": story.event, "verified_facts": facts, "sources": story.sources}
     reply = model.chat(SYSTEM, json.dumps(payload, ensure_ascii=False), json_mode=True, temperature=.25)
     if token_sink:
         token_sink.tokens_prompt += reply.prompt_tokens; token_sink.tokens_completion += reply.completion_tokens
     data = first_json(reply.text)
-    x = str(data.get("x", ""))[:280]
-    threads = str(data.get("threads", ""))[:900]
+    x = str(data.get("x", "")).strip()[:280] or story.headline[:280]
+    threads = str(data.get("threads", "")).strip()[:900] or f"{story.headline}. {story.event or ''}".strip()[:900]
 
     short_raw = data.get("youtube_short")
     if isinstance(short_raw, dict):
-        short_title = str(short_raw.get("title", f"{story.headline} #Shorts"))[:100]
+        short_title = str(short_raw.get("title", f"{story.headline[:60]} #Shorts"))[:100]
         short_desc = str(short_raw.get("description", story.headline))[:500]
-        short_script = str(short_raw.get("script", "")).strip() or " ".join(story.key_facts[:3])
+        short_script = str(short_raw.get("script", "")).strip() or " ".join(facts[:3])
         keywords = [str(k).strip() for k in short_raw.get("visual_keywords", []) if str(k).strip()]
         if not keywords:
             keywords = [w for w in story.headline.split() if len(w) > 4][:4] or ["technology", "news"]
     else:
         short_title = f"{story.headline[:60]} #Shorts"
         short_desc = f"{story.headline}\n\n#News #Tech #Shorts"
-        short_script = f"{story.headline}. {' '.join(story.key_facts[:2])}"
+        short_script = f"{story.headline}. {' '.join(facts[:2])}"
         keywords = [w for w in story.headline.split() if len(w) > 4][:4] or ["technology", "news"]
 
     shorts_draft = ShortsDraft(

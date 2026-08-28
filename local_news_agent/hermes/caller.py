@@ -12,9 +12,9 @@ from ..model import LocalModel, ModelReply, count_messages_tokens, estimate_toke
 
 logger = logging.getLogger(__name__)
 
-# Standard 16K context limit (16,384 tokens)
-DEFAULT_MAX_CONTEXT_TOKENS = 16384
-DEFAULT_RESERVED_COMPLETION_TOKENS = 2048
+# Standard 2K anti-OOM context limit (2,048 tokens)
+DEFAULT_MAX_CONTEXT_TOKENS = 2048
+DEFAULT_RESERVED_COMPLETION_TOKENS = 512
 
 
 @dataclass
@@ -119,18 +119,18 @@ class ToolRegistry:
 
 
 class ContextBudgetManager:
-    """Enforces strict 16K token limit and prunes old context to prevent OOM."""
+    """Enforces strict token context limit and prunes old context to prevent OOM."""
 
     def __init__(
         self,
         max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
         reserved_completion_tokens: int = DEFAULT_RESERVED_COMPLETION_TOKENS,
-        max_observation_chars: int = 3500,
+        max_observation_chars: int = 1500,
     ) -> None:
         self.max_context_tokens = max_context_tokens
         self.reserved_completion_tokens = reserved_completion_tokens
         self.max_observation_chars = max_observation_chars
-        self.budget_ceiling = max(2048, self.max_context_tokens - self.reserved_completion_tokens)
+        self.budget_ceiling = max(512, self.max_context_tokens - self.reserved_completion_tokens)
 
     def sanitize_observation(self, output: Any) -> str:
         """Format and clamp tool outputs to prevent giant payload blowups."""
@@ -219,7 +219,7 @@ class HermesToolCaller:
         )
         self.budget_manager = ContextBudgetManager(
             max_context_tokens=context_limit,
-            max_observation_chars=getattr(settings, "max_observation_chars", 3500) if settings else 3500,
+            max_observation_chars=getattr(settings, "max_observation_chars", 1500) if settings else 1500,
         )
 
     def build_system_prompt(self, base_system: str | None = None) -> str:

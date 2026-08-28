@@ -1,8 +1,6 @@
-# Hermes tool configuration bounded to 16K tokens to prevent OOM
+# Hermes tool configuration bounded to 2048 tokens to prevent OOM
 model:
   default: hermes3:3b
   provider: custom
   base_url: http://localhost:11434/v1
-  context_length: 16384
-
-
+  context_length: 2048

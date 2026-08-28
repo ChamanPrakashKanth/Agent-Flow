@@ -101,8 +101,47 @@ class QwenHarness:
         self.youtube_draft = draft
         return {"ok": True, "draft": draft, "summary": "YouTube draft saved locally; publishing is disabled", "sources": [x["source"] for x in self.facts]}
 
-    def run(self, topic: str):
+    def run(self, topic: str, publish: bool = False):
+        from ..publisher.queue import Publisher
+        from ..publisher.hermes_browser import publish_one_due
+        from ..schemas import Draft, ShortsDraft, Story
         self.topic = topic
         self.results = []; self.facts = []; self.x_draft = ""; self.short_script = ""; self.youtube_draft = None
         tools = {"search_web": self._search, "open_page": self._extract, "extract_page": self._extract, "save_fact": self._save_fact, "draft_x_post": self._draft_x, "create_short_script": self._short_script, "save_youtube_draft": self._save_youtube}
-        return RecursiveAgent(self._decide, tools, self.memory, self.controller, self.store, self.s.qwen_max_actions).run(topic)
+        run_res = RecursiveAgent(self._decide, tools, self.memory, self.controller, self.store, self.s.qwen_max_actions).run(topic)
+        
+        if run_res.status == "FINISHED" and (self.x_draft or self.youtube_draft):
+            video_path = str(self.youtube_draft.get("video", "")) if self.youtube_draft else ""
+            short_draft = ShortsDraft(
+                title=str(getattr(self, "short_title", f"{self.topic[:70]} #Shorts")),
+                description="Local research draft. Sources included.",
+                script=self.short_script,
+                video_path=video_path,
+                generated=bool(video_path and Path(video_path).exists()),
+                duration_seconds=0.0
+            )
+            story = Story(
+                headline=self.topic,
+                event=self.facts[0]["claim"] if self.facts else self.topic,
+                sources=[x["source"] for x in self.facts],
+                key_facts=[x["claim"] for x in self.facts],
+                verified=True,
+                canonical_origins=list({x["source"].split("/")[2] for x in self.facts if "/" in x["source"]})
+            )
+            draft = Draft(
+                x=self.x_draft,
+                threads=self.short_script[:500],
+                youtube_short=short_draft,
+                verified=True
+            )
+            pub_mode = "AUTO" if publish else self.s.publish_mode
+            publisher = Publisher(pub_mode, self.s.queue_path, self.s.threads_publish_enabled)
+            publisher.submit(run_res.run_id, story, draft)
+            
+            if publish or self.s.publish_mode == "AUTO":
+                try:
+                    pub_res = publish_one_due(self.s, run_id=run_res.run_id)
+                    setattr(run_res, "publish_results", pub_res)
+                except Exception as exc:
+                    setattr(run_res, "publish_results", {"error": str(exc)})
+        return run_res

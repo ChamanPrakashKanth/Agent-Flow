@@ -63,12 +63,23 @@ if %ERRORLEVEL% NEQ 0 (
 echo [OK] llama.cpp server is ready!
 echo.
 
-:: 3. Launch Qwen Autonomous Agent
-echo [2/3] Running Qwen Autonomous Harness...
+:: 3. Check Chrome extension bridge relay
+echo [2/3] Checking Chrome Extension Bridge relay on port 8765...
+powershell -NoProfile -Command "if (-not (Test-NetConnection 127.0.0.1 -Port 8765 -InformationLevel Quiet -WarningAction SilentlyContinue)) { exit 1 } else { exit 0 }"
+if %ERRORLEVEL% NEQ 0 (
+    echo [*] Starting Chrome extension bridge relay...
+    start "Chrome Extension Bridge" /min "%PYTHON_EXE%" scripts\start_extension_bridge.py
+    timeout /t 2 /nobreak >nul
+)
+echo [OK] Chrome Extension Bridge is active!
+echo.
+
+:: 4. Launch Qwen Autonomous Agent with Publishing Enabled
+echo [3/3] Running Qwen Autonomous Harness (with Chrome Extension Publishing)...
 echo [*] Topic: %TOPIC%
 echo.
 
-"%PYTHON_EXE%" -m local_news_agent.cli qwen-run --browser direct --topic "%TOPIC%"
+"%PYTHON_EXE%" -m local_news_agent.cli qwen-run --browser extension --publish --topic "%TOPIC%"
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.

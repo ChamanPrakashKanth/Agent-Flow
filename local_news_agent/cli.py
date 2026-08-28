@@ -99,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     qwen = sub.add_parser("qwen-run", help="run the bounded Qwen Coder / llama.cpp harness")
     qwen.add_argument("--topic", default=None)
     qwen.add_argument("--browser", choices=["direct", "extension"], default="extension")
+    qwen.add_argument("--publish", action="store_true", help="publish queued draft to X/Threads and upload Short to YouTube Studio")
     inspect = sub.add_parser("inspect-run", help="inspect persisted Qwen harness run state")
     inspect.add_argument("run_id")
     bench = sub.add_parser("benchmark", help="run 30-task A-E offline benchmark")
@@ -112,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "inspect-run":
         print(json.dumps(RunStore(settings.database_path).inspect(args.run_id), indent=2)); return 0
     if args.command == "qwen-run":
-        result = QwenHarness(settings, args.browser).run(args.topic)
+        result = QwenHarness(settings, args.browser).run(args.topic, publish=args.publish)
         print(json.dumps(result.__dict__, indent=2)); return 0
     if args.command == "publish-due":
         result = publish_one_due(settings)

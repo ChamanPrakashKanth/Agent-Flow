@@ -1,7 +1,8 @@
 param(
     [string]$ModelPath = "",
     [string]$Topic = "AI, quantum mechanics, defence systems, theoretical physics",
-    [string]$Browser = "direct",
+    [string]$Browser = "extension",
+    [switch]$Publish = $true,
     [int]$Port = 8080
 )
 
@@ -76,4 +77,6 @@ if ($Browser -eq "extension") {
 
 # 3. Run Qwen Autonomous Agent Harness
 Write-Host "[3/3] Launching Qwen Autonomous Harness (Topic: '$Topic')..." -ForegroundColor Cyan
-& $pythonExe -m local_news_agent.cli qwen-run --browser $Browser --topic $Topic
+$cmdArgs = @("qwen-run", "--browser", $Browser, "--topic", $Topic)
+if ($Publish) { $cmdArgs += "--publish" }
+& $pythonExe -m local_news_agent.cli @cmdArgs

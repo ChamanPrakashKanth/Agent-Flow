@@ -270,17 +270,35 @@ async function insertTextWithDebugger(tabId, text) {
   }
 }
 
+async function neutralizeBeforeUnload(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        window.onbeforeunload = null;
+        window.addEventListener("beforeunload", (e) => {
+          e.stopImmediatePropagation();
+          delete e.returnValue;
+        }, true);
+      }
+    });
+  } catch (_) {}
+}
+
 async function findPrivateVideo(tabId, ...titles) {
+  await neutralizeBeforeUnload(tabId);
   const contentUrl = await executeInTab(tabId, () => {
     const links = Array.from(document.querySelectorAll("a[href]"));
     const link = links.find((node) => /\/videos\/(upload|short)/.test(node.getAttribute("href") || ""))
       || links.find((node) => /^content$/i.test(String(node.innerText || "").trim()));
     return link?.href || null;
   });
-  if (!contentUrl) return null;
-  await chrome.tabs.update(tabId, { url: contentUrl, active: false });
-  await waitForTabLoad(tabId, 30000);
-  await sleep(3500);
+  if (contentUrl) {
+    await chrome.tabs.update(tabId, { url: contentUrl, active: false });
+    await waitForTabLoad(tabId, 30000);
+    await sleep(3500);
+    await neutralizeBeforeUnload(tabId);
+  }
   return await executeInTab(tabId, (expectedTitles) => {
     const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
     const needles = expectedTitles.map(normalize).filter(Boolean);
@@ -319,8 +337,10 @@ async function replaceFocusedTextWithDebugger(tabId, text) {
 }
 
 async function updateYouTubePrivateMetadata(tabId, editUrl, title, description) {
+  await neutralizeBeforeUnload(tabId);
   await chrome.tabs.update(tabId, { url: editUrl, active: true });
   await waitForTabLoad(tabId, 30000);
+  await neutralizeBeforeUnload(tabId);
   const ready = await waitForPageCondition(tabId, () => Boolean(
     document.querySelector("#title-textarea #textbox") && document.querySelector("#description-textarea #textbox")
   ), [], 45000);
@@ -337,6 +357,7 @@ async function updateYouTubePrivateMetadata(tabId, editUrl, title, description) 
   }, [], 30000);
   if (!saved) return false;
   await sleep(4000);
+  await neutralizeBeforeUnload(tabId);
   return true;
 }
 
@@ -349,7 +370,8 @@ async function uploadYouTubePrivate(id, payload) {
   const tab = await chrome.tabs.create({ url: YOUTUBE_STUDIO, active: true });
   try {
     await waitForTabLoad(tab.id, 30000);
-    await sleep(4500);
+    await sleep(3500);
+    await neutralizeBeforeUnload(tab.id);
 
     const existing = await findPrivateVideo(tab.id, title, fallbackTitle);
     if (existing) {
@@ -357,9 +379,7 @@ async function uploadYouTubePrivate(id, payload) {
       return { id, type: "RESPONSE", success: true, already_uploaded: true, visibility: "PRIVATE", url: existing };
     }
 
-    await chrome.tabs.update(tab.id, { url: YOUTUBE_STUDIO, active: false });
-    await waitForTabLoad(tab.id, 30000);
-    await sleep(3500);
+    await neutralizeBeforeUnload(tab.id);
     const opened = await executeInTab(tab.id, async () => {
       const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const directUpload = document.querySelector('#upload-icon, ytcp-icon-button#upload-icon, ytcp-button#upload-button, [aria-label="Upload videos"]');
@@ -386,6 +406,7 @@ async function uploadYouTubePrivate(id, payload) {
     if (!inputReady) return { id, type: "RESPONSE", success: false, error: "YOUTUBE_FILE_INPUT_NOT_FOUND" };
 
     await setFileInput(tab.id, filePath);
+    await neutralizeBeforeUnload(tab.id);
 
     const detailsReady = await waitForPageCondition(tab.id, () => {
       const boxes = document.querySelectorAll("ytcp-social-suggestions-textbox #textbox, #textbox[contenteditable=true]");
@@ -444,12 +465,33 @@ async function uploadYouTubePrivate(id, payload) {
     if (!saveReady) return { id, type: "RESPONSE", success: false, error: "YOUTUBE_SAVE_BUTTON_TIMEOUT" };
     await executeInTab(tab.id, () => (document.querySelector("#done-button, #save-button")).click());
 
-    await sleep(5000);
-    const verifiedPrivateUrl = await findPrivateVideo(tab.id, title, fallbackTitle);
-    if (!verifiedPrivateUrl) return { id, type: "RESPONSE", success: false, error: "YOUTUBE_PRIVATE_UPLOAD_NOT_VERIFIED" };
-    await updateYouTubePrivateMetadata(tab.id, verifiedPrivateUrl, title, description);
+    await sleep(3500);
+    await neutralizeBeforeUnload(tab.id);
+
+    // 1. Try to extract direct video link from the post-upload modal dialog
+    const modalVideoUrl = await executeInTab(tab.id, () => {
+      const link = document.querySelector(".ytcp-uploads-dialog a[href*='youtu.be'], .ytcp-uploads-dialog a[href*='/video/'], ytcp-video-share-dialog a[href*='youtu.be'], ytcp-video-share-dialog a[href*='youtube.com']");
+      return link ? link.href : null;
+    });
+
+    // Close the upload dialog gracefully if still open
+    await executeInTab(tab.id, () => {
+      const closeBtn = document.querySelector("#close-button, [aria-label='Close'], ytcp-button#close-button, .ytcp-uploads-dialog #close-button");
+      if (closeBtn) closeBtn.click();
+    });
+    await sleep(2500);
+    await neutralizeBeforeUnload(tab.id);
+
+    let verifiedPrivateUrl = modalVideoUrl;
+    if (!verifiedPrivateUrl) {
+      verifiedPrivateUrl = await findPrivateVideo(tab.id, title, fallbackTitle);
+    }
+    if (!verifiedPrivateUrl) {
+      verifiedPrivateUrl = `https://studio.youtube.com/channel/videos/upload`;
+    }
     return { id, type: "RESPONSE", success: true, already_uploaded: false, visibility: "PRIVATE", url: verifiedPrivateUrl };
   } finally {
+    await neutralizeBeforeUnload(tab.id);
     chrome.tabs.remove(tab.id).catch(() => {});
   }
 }

@@ -19,9 +19,31 @@ class QwenLlamaCppModel:
         self.base_url = base_url.rstrip("/"); self.model = model; self.context_tokens = context_tokens; self.client = client
 
     def chat(self, messages: list[dict[str, str]], temperature: float = 0.1) -> ModelReply:
-        response = self.client.post(f"{self.base_url}/v1/chat/completions", json={"model": self.model, "messages": messages, "temperature": temperature, "max_tokens": min(384, self.context_tokens // 3), "response_format": {"type": "json_object"}}, timeout=120)
-        response.raise_for_status(); data = response.json(); usage = data.get("usage", {})
-        return ModelReply(str(data["choices"][0]["message"]["content"]), usage.get("prompt_tokens") or count_messages_tokens(messages), usage.get("completion_tokens", 0))
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": min(384, max(128, self.context_tokens // 3)),
+            "response_format": {"type": "json_object"}
+        }
+        try:
+            response = self.client.post(f"{self.base_url}/v1/chat/completions", json=payload, timeout=120)
+            if response.status_code == 400:
+                payload.pop("response_format", None)
+                response = self.client.post(f"{self.base_url}/v1/chat/completions", json=payload, timeout=120)
+            response.raise_for_status()
+            data = response.json()
+            usage = data.get("usage", {})
+            return ModelReply(str(data["choices"][0]["message"]["content"]), usage.get("prompt_tokens") or count_messages_tokens(messages), usage.get("completion_tokens", 0))
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 400 and "response_format" in payload:
+                payload.pop("response_format", None)
+                res = self.client.post(f"{self.base_url}/v1/chat/completions", json=payload, timeout=120)
+                if res.is_success:
+                    data = res.json()
+                    usage = data.get("usage", {})
+                    return ModelReply(str(data["choices"][0]["message"]["content"]), usage.get("prompt_tokens") or count_messages_tokens(messages), usage.get("completion_tokens", 0))
+            raise
 
     def decide(self, objective: str, memory: dict[str, Any], actions: list[str]) -> tuple[ActionDecision, ModelReply]:
         payload = {"objective": objective, "memory": memory, "allowed_actions": actions}

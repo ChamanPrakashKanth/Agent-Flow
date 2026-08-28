@@ -61,26 +61,44 @@ def parse_decision(text: str, repair: Callable[[str], str] | None = None) -> Act
 
 
 def _parse_labeled_decision(text: str) -> ActionDecision | None:
-    """Safely normalize Qwen's common five-heading response into the schema."""
+    """Safely normalize Qwen's common heading and key-value formats into the schema."""
+    if not text:
+        return None
+    # 1. Match markdown headings ### Thought Summary ...
     match = re.search(
         r"(?:^|\n)###\s*Thought Summary\s*(.*?)\s*###\s*Action\s*(.*?)\s*###\s*Arguments\s*(.*?)\s*###\s*Expected Result\s*(.*?)\s*###\s*Confidence\s*([0-9.]+%?)",
-        text or "", re.DOTALL | re.IGNORECASE,
+        text, re.DOTALL | re.IGNORECASE,
     )
-    if not match:
-        return None
-    thought, action, raw_args, expected, confidence = (x.strip() for x in match.groups())
-    action = action.splitlines()[0].strip().lower()
+    if match:
+        thought, action, raw_args, expected, confidence = (x.strip() for x in match.groups())
+    else:
+        # 2. Match key-value format (thought_summary: ..., action: ..., etc.)
+        p_thought = re.search(r"(?:^|\n)(?:thought_summary|thought):\s*(.*?)(?=\n(?:action|arguments|expected_result|confidence):|$)", text, re.DOTALL | re.IGNORECASE)
+        p_action = re.search(r"(?:^|\n)action:\s*(.*?)(?=\n(?:arguments|expected_result|confidence|thought_summary):|$)", text, re.DOTALL | re.IGNORECASE)
+        p_args = re.search(r"(?:^|\n)arguments:\s*(.*?)(?=\n(?:expected_result|confidence|thought_summary|action):|$)", text, re.DOTALL | re.IGNORECASE)
+        p_exp = re.search(r"(?:^|\n)(?:expected_result|expected):\s*(.*?)(?=\n(?:confidence|thought_summary|action|arguments):|$)", text, re.DOTALL | re.IGNORECASE)
+        p_conf = re.search(r"(?:^|\n)confidence:\s*([0-9.]+%?)", text, re.IGNORECASE)
+        
+        if not (p_action and p_thought):
+            return None
+        thought = p_thought.group(1).strip()
+        action = p_action.group(1).strip()
+        raw_args = p_args.group(1).strip() if p_args else "{}"
+        expected = p_exp.group(1).strip() if p_exp else ""
+        confidence = p_conf.group(1).strip() if p_conf else "0.7"
+
+    action = action.splitlines()[0].strip().strip('"`').lower()
     try:
         arguments = json.loads(raw_args)
         if not isinstance(arguments, dict):
-            arguments = {}
+            arguments = {"query": str(arguments)} if action == "search_web" else {}
     except Exception:
         value = raw_args.strip('"` \n')
         arguments = {"query": value} if action == "search_web" and value else {}
     try:
         score = float(confidence.rstrip("%")) / (100.0 if confidence.endswith("%") else 1.0)
     except ValueError:
-        return None
+        score = 0.7
     try:
         return ActionDecision(thought_summary=thought[:500], action=action, arguments=arguments, expected_result=expected[:500], confidence=min(1.0, max(0.0, score)))
     except Exception:

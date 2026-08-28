@@ -161,10 +161,6 @@ async def relay_handler(websocket: Any) -> None:
                     return
                 request_id = str(message.get("id", ""))
                 valid, error = _valid_command(message)
-                if valid and message.get("action") == "EXTRACT_PAGE":
-                    requested_url = str(message.get("payload", {}).get("url", ""))
-                    if requested_url not in _ALLOWED_EXTRACT_URLS:
-                        valid, error = False, "EXTRACT_URL_NOT_FROM_SEARCH_RESULTS"
                 if not request_id or not valid:
                     await websocket.send(json.dumps({"id": request_id, "type": "RESPONSE", "success": False, "error": error or "MISSING_ID"}))
                     continue

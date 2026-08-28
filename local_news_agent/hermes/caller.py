@@ -145,7 +145,7 @@ class ContextBudgetManager:
         return text
 
     def prune_context(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Prune older intermediate tool responses if total tokens approach the 16k budget."""
+        """Prune older intermediate tool responses as the configured budget fills."""
         current_tokens = count_messages_tokens(messages)
         if current_tokens <= self.budget_ceiling or len(messages) <= 3:
             return messages
@@ -159,7 +159,7 @@ class ContextBudgetManager:
             msg = pruned[i]
             content = str(msg.get("content", ""))
             if len(content) > 400:
-                truncated_content = content[:250] + "\n[...prior observation pruned for 16k context budget...]"
+                truncated_content = content[:250] + "\n[...prior observation pruned for context budget...]"
                 saved_tokens = estimate_tokens(content) - estimate_tokens(truncated_content)
                 msg["content"] = truncated_content
                 current_tokens -= max(0, saved_tokens)
@@ -200,7 +200,7 @@ class ToolCallResult:
 
 
 class HermesToolCaller:
-    """Native Python implementation of Nous Hermes 16K tool calling engine."""
+    """Native Python implementation of a bounded Nous-style tool-call loop."""
 
     def __init__(
         self,
@@ -333,7 +333,7 @@ class HermesToolCaller:
         max_turns: int = 6,
         temperature: float = 0.1,
     ) -> ToolCallResult:
-        """Run full autonomous multi-turn Hermes tool calling loop with 16k context budgeting."""
+        """Run a bounded multi-turn tool-call loop within the configured context."""
         system_content = self.build_system_prompt(system_override)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_content},
@@ -347,7 +347,7 @@ class HermesToolCaller:
 
         while turn < max_turns:
             turn += 1
-            # Apply strict 16K anti-OOM context pruning before making the LLM call
+            # Apply strict context pruning before making the LLM call.
             messages = self.budget_manager.prune_context(messages)
 
             reply: ModelReply = self.model.chat_messages(

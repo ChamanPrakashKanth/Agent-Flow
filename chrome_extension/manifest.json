@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Local News Agent - Codex Chrome Bridge",
   "version": "1.3.0",
-  "description": "Local bridge for autonomous web search, page extraction, verified X/Threads posting, and private YouTube Shorts uploads.",
+  "description": "Local bridge for autonomous web search, page extraction, and verified X/Threads posting. YouTube artifacts stay draft-only.",
   "permissions": [
     "tabs",
     "scripting",

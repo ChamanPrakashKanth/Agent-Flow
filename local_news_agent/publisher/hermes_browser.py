@@ -8,11 +8,12 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from ..config import Settings
+from .extension_bridge import ChromeExtensionPublisher
 from .hermes_computer_use import HermesComputerUsePublisher
 from .queue import queue_lock
 
 
-REQUIRED_PLATFORMS = ("x", "threads", "youtube")
+REQUIRED_PLATFORMS = ("x", "threads")
 LEASE_DURATION = timedelta(minutes=10)
 
 
@@ -60,7 +61,7 @@ def _verified_url(platform: str, value: str) -> bool:
     if parsed.scheme != "https":
         return False
     if platform == "x":
-        return host == "x.com" and "/status/" in parsed.path
+        return host in {"x.com", "www.x.com"} and "/status/" in parsed.path
     if platform == "threads":
         return host in {"threads.com", "www.threads.com"} and "/post/" in parsed.path
     return (
@@ -70,21 +71,28 @@ def _verified_url(platform: str, value: str) -> bool:
     )
 
 
-def publish_one_due(settings: Settings) -> dict[str, Any]:
-    """Claim and publish one verified record through Hermes Computer Use."""
+def publish_one_due(settings: Settings, run_id: str | None = None) -> dict[str, Any]:
+    """Claim and publish X/Threads only; YouTube artifacts always remain drafts."""
     settings.ensure_dirs()
     now = _utc_now()
     claim_id = uuid.uuid4().hex
 
     with queue_lock(settings.queue_path):
         records = _records(settings.queue_path)
-        candidate_index = next((index for index, item in enumerate(records) if _eligible(item, now)), None)
+        if run_id:
+            candidate_index = next((index for index, item in enumerate(records) if item.get("run_id") == run_id), None)
+        else:
+            eligible_indices = [index for index, item in enumerate(records) if _eligible(item, now)]
+            candidate_index = eligible_indices[-1] if eligible_indices else None
         if candidate_index is None:
             return {"status": "NO_VERIFIED_DRAFT"}
         record = records[candidate_index]
         statuses = record.setdefault("platform_status", {})
         for platform in REQUIRED_PLATFORMS:
-            statuses.setdefault(platform, "PENDING")
+            if platform == "threads" and not settings.threads_publish_enabled:
+                statuses[platform] = "PAUSED"
+            else:
+                statuses.setdefault(platform, "PENDING")
         record["status"] = "PUBLISHING"
         record["publish_claim_id"] = claim_id
         record["publish_started_at"] = now.isoformat()
@@ -92,13 +100,15 @@ def publish_one_due(settings: Settings) -> dict[str, Any]:
         _save(settings.queue_path, records)
 
     try:
-        # Research may use the direct RSS/web backend, but publishing is always
-        # routed through bounded Hermes Computer Use. Never silently fall back
-        # to the legacy localhost extension bridge.
-        results = HermesComputerUsePublisher(settings).publish_all(record)
+        if settings.publish_backend == "extension":
+            results = ChromeExtensionPublisher().publish_all(record)
+        elif settings.publish_backend == "hermes":
+            results = HermesComputerUsePublisher(settings).publish_all(record)
+        else:
+            raise ValueError(f"unsupported publish backend: {settings.publish_backend}")
     except Exception as exc:
         results = {platform: {"status": "FAILED", "url": "", "message": type(exc).__name__}
-                   for platform in REQUIRED_PLATFORMS if record["platform_status"].get(platform) != "POSTED"}
+                   for platform in REQUIRED_PLATFORMS if record["platform_status"].get(platform) not in {"POSTED", "PAUSED"}}
 
     if not isinstance(results, dict):
         results = {}
@@ -106,7 +116,15 @@ def publish_one_due(settings: Settings) -> dict[str, Any]:
     report: dict[str, Any] = {"run_id": record.get("run_id"), "platforms": {}}
 
     for platform in REQUIRED_PLATFORMS:
-        expected_status = "PRIVATE" if platform == "youtube" else "POSTED"
+        if platform == "threads" and not settings.threads_publish_enabled:
+            record["platform_status"][platform] = "PAUSED"
+            report["platforms"][platform] = {
+                "status": "PAUSED",
+                "url": "",
+                "message": "Threads publishing disabled by THREADS_PUBLISH_ENABLED",
+            }
+            continue
+        expected_status = "POSTED"
         if record["platform_status"].get(platform) == expected_status:
             report["platforms"][platform] = {
                 "status": expected_status,
@@ -114,15 +132,27 @@ def publish_one_due(settings: Settings) -> dict[str, Any]:
             }
             continue
         result = results.get(platform, {})
-        url = str(result.get("url", ""))
-        success = result.get("status") == expected_status and _verified_url(platform, url)
+        if isinstance(result, str):
+            url = result.strip()
+            status_val = expected_status if _verified_url(platform, url) else "FAILED"
+            msg = ""
+        elif isinstance(result, dict):
+            url = str(result.get("url", "")).strip()
+            status_val = str(result.get("status", ""))
+            msg = str(result.get("message", ""))[:500]
+        else:
+            url = ""
+            status_val = "FAILED"
+            msg = ""
+
+        success = (status_val == expected_status) and _verified_url(platform, url)
         record["platform_status"][platform] = expected_status if success else "FAILED"
         if success:
             record.setdefault("post_urls", {})[platform] = url
         report["platforms"][platform] = {
             "status": record["platform_status"][platform],
             "url": url if success else "",
-            "message": str(result.get("message", ""))[:500],
+            "message": msg,
         }
 
     with queue_lock(settings.queue_path):
@@ -134,12 +164,14 @@ def publish_one_due(settings: Settings) -> dict[str, Any]:
             raise RuntimeError("publishing lease ownership changed")
         target["platform_status"] = record["platform_status"]
         target["post_urls"] = record.get("post_urls", {})
+        target["publish_results"] = report["platforms"]
+        threads_ok = not settings.threads_publish_enabled or record["platform_status"].get("threads") in {"POSTED", "PAUSED"}
         complete = (
             record["platform_status"].get("x") == "POSTED"
-            and record["platform_status"].get("threads") == "POSTED"
-            and record["platform_status"].get("youtube") == "PRIVATE"
+            and threads_ok
         )
-        target["status"] = "POSTED_AND_PRIVATE_UPLOADED" if complete else "PARTIALLY_POSTED"
+        target["platform_status"]["youtube"] = "DRAFT" if record.get("draft_artifacts", {}).get("youtube_short", {}).get("video_path") else "DRAFT_NOT_GENERATED"
+        target["status"] = "POSTED" if complete else "PARTIALLY_POSTED"
         target["published_at"] = _utc_now().isoformat() if complete else None
         target.pop("publish_claim_id", None)
         target.pop("publish_lease_until", None)

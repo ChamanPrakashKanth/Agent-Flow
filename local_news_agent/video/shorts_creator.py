@@ -137,29 +137,51 @@ $synth.Dispose()
     def _normalize_clip(self, clip_path: Path, output_clip: Path, duration: float) -> bool:
         """Scale and crop a clip to standard vertical 1080x1920 portrait without subtitles or text."""
         output_clip.parent.mkdir(parents=True, exist_ok=True)
-        # Scale to fill 1080x1920 and center crop, no subtitles
         vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30"
-        for vcodec in ("libx264", "mpeg4"):
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", str(clip_path),
-                "-t", str(duration),
-                "-vf", vf,
-                "-an",
-                "-c:v", vcodec,
-                "-preset", "ultrafast",
-                "-pix_fmt", "yuv420p",
-                str(output_clip),
-            ] if vcodec == "libx264" else [
-                "ffmpeg", "-y",
-                "-i", str(clip_path),
-                "-t", str(duration),
-                "-vf", vf,
-                "-an",
-                "-c:v", vcodec,
-                "-pix_fmt", "yuv420p",
-                str(output_clip),
-            ]
+        for vcodec in ("h264_nvenc", "libx264", "mpeg4"):
+            if vcodec == "h264_nvenc":
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", str(clip_path),
+                    "-t", str(duration),
+                    "-vf", vf,
+                    "-an",
+                    "-c:v", "h264_nvenc",
+                    "-preset", "p1",
+                    "-b:v", "2M",
+                    "-pix_fmt", "yuv420p",
+                    str(output_clip),
+                ]
+            elif vcodec == "libx264":
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-threads", "1",
+                    "-i", str(clip_path),
+                    "-t", str(duration),
+                    "-vf", vf,
+                    "-an",
+                    "-c:v", "libx264",
+                    "-preset", "ultrafast",
+                    "-tune", "zerolatency",
+                    "-rc-lookahead", "0",
+                    "-max_muxing_queue_size", "128",
+                    "-bufsize", "1M",
+                    "-b:v", "1.5M",
+                    "-pix_fmt", "yuv420p",
+                    str(output_clip),
+                ]
+            else:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-threads", "1",
+                    "-i", str(clip_path),
+                    "-t", str(duration),
+                    "-vf", vf,
+                    "-an",
+                    "-c:v", vcodec,
+                    "-pix_fmt", "yuv420p",
+                    str(output_clip),
+                ]
             try:
                 res = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 if res.returncode == 0 and output_clip.exists() and output_clip.stat().st_size > 1000:
@@ -172,23 +194,44 @@ $synth.Dispose()
         """Generate a sleek, dynamic gradient 1080x1920 background without any subtitles or text."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
         vf = "color=c=0x111827:s=1080x1920:r=30"
-        for vcodec in ("libx264", "mpeg4"):
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "lavfi", "-i", vf,
-                "-t", str(duration),
-                "-c:v", vcodec,
-                "-preset", "ultrafast",
-                "-pix_fmt", "yuv420p",
-                str(output_path),
-            ] if vcodec == "libx264" else [
-                "ffmpeg", "-y",
-                "-f", "lavfi", "-i", vf,
-                "-t", str(duration),
-                "-c:v", vcodec,
-                "-pix_fmt", "yuv420p",
-                str(output_path),
-            ]
+        for vcodec in ("h264_nvenc", "libx264", "mpeg4"):
+            if vcodec == "h264_nvenc":
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "lavfi", "-i", vf,
+                    "-t", str(duration),
+                    "-c:v", "h264_nvenc",
+                    "-preset", "p1",
+                    "-b:v", "2M",
+                    "-pix_fmt", "yuv420p",
+                    str(output_path),
+                ]
+            elif vcodec == "libx264":
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-threads", "1",
+                    "-f", "lavfi", "-i", vf,
+                    "-t", str(duration),
+                    "-c:v", "libx264",
+                    "-preset", "ultrafast",
+                    "-tune", "zerolatency",
+                    "-rc-lookahead", "0",
+                    "-max_muxing_queue_size", "128",
+                    "-bufsize", "1M",
+                    "-b:v", "1.5M",
+                    "-pix_fmt", "yuv420p",
+                    str(output_path),
+                ]
+            else:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-threads", "1",
+                    "-f", "lavfi", "-i", vf,
+                    "-t", str(duration),
+                    "-c:v", vcodec,
+                    "-pix_fmt", "yuv420p",
+                    str(output_path),
+                ]
             try:
                 res = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 if res.returncode == 0 and output_path.exists() and output_path.stat().st_size > 1000:
@@ -205,10 +248,11 @@ $synth.Dispose()
 
         try:
             normalized_clips: list[Path] = []
-            if clips:
-                # Distribute duration across available clips
-                clip_dur = max(3.0, total_duration / len(clips))
-                for i, clip in enumerate(clips):
+            selected_clips = clips[:3] if clips else []
+            if selected_clips:
+                # Distribute duration across available clips (max 3)
+                clip_dur = max(3.0, total_duration / len(selected_clips))
+                for i, clip in enumerate(selected_clips):
                     norm_out = temp_dir / f"norm_{i}.mp4"
                     if self._normalize_clip(clip, norm_out, clip_dur):
                         normalized_clips.append(norm_out)
@@ -235,29 +279,53 @@ $synth.Dispose()
                             break
 
             # Final render: stitch video + voiceover audio (no subtitles, pure clean video)
-            for vcodec in ("libx264", "mpeg4"):
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-f", "concat", "-safe", "0", "-i", str(concat_file),
-                    "-i", str(audio_path),
-                    "-c:v", vcodec,
-                    "-preset", "ultrafast",
-                    "-pix_fmt", "yuv420p",
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-shortest",
-                    str(output_video),
-                ] if vcodec == "libx264" else [
-                    "ffmpeg", "-y",
-                    "-f", "concat", "-safe", "0", "-i", str(concat_file),
-                    "-i", str(audio_path),
-                    "-c:v", vcodec,
-                    "-pix_fmt", "yuv420p",
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-shortest",
-                    str(output_video),
-                ]
+            for vcodec in ("h264_nvenc", "libx264", "mpeg4"):
+                if vcodec == "h264_nvenc":
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-f", "concat", "-safe", "0", "-i", str(concat_file),
+                        "-i", str(audio_path),
+                        "-c:v", "h264_nvenc",
+                        "-preset", "p1",
+                        "-b:v", "2M",
+                        "-pix_fmt", "yuv420p",
+                        "-c:a", "aac",
+                        "-b:a", "192k",
+                        "-shortest",
+                        str(output_video),
+                    ]
+                elif vcodec == "libx264":
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-threads", "1",
+                        "-f", "concat", "-safe", "0", "-i", str(concat_file),
+                        "-i", str(audio_path),
+                        "-c:v", "libx264",
+                        "-preset", "ultrafast",
+                        "-tune", "zerolatency",
+                        "-rc-lookahead", "0",
+                        "-max_muxing_queue_size", "128",
+                        "-bufsize", "1M",
+                        "-b:v", "1.5M",
+                        "-pix_fmt", "yuv420p",
+                        "-c:a", "aac",
+                        "-b:a", "192k",
+                        "-shortest",
+                        str(output_video),
+                    ]
+                else:
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-threads", "1",
+                        "-f", "concat", "-safe", "0", "-i", str(concat_file),
+                        "-i", str(audio_path),
+                        "-c:v", vcodec,
+                        "-pix_fmt", "yuv420p",
+                        "-c:a", "aac",
+                        "-b:a", "192k",
+                        "-shortest",
+                        str(output_video),
+                    ]
                 try:
                     res = subprocess.run(cmd, capture_output=True, text=True, check=False)
                     if res.returncode == 0 and output_video.exists() and output_video.stat().st_size > 1000:
@@ -267,6 +335,14 @@ $synth.Dispose()
             return False
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+            try:
+                import gc
+                gc.collect()
+                if sys.platform == "win32":
+                    import ctypes
+                    ctypes.windll.psapi.EmptyWorkingSet(ctypes.windll.kernel32.GetCurrentProcess())
+            except Exception:
+                pass
 
     def create_short(self, draft: ShortsDraft, run_id: str) -> ShortsDraft:
         """Fully autonomous draft production pipeline; no upload is performed."""

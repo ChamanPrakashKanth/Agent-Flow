@@ -12,7 +12,7 @@ import feedparser
 import httpx
 from bs4 import BeautifulSoup
 from ..config import Settings
-from ..model import LocalModel, first_json
+from ..model import LocalModel, first_json, trim_process_memory
 from ..schemas import Evidence, SearchResult
 from .caller import HermesToolCaller, ToolRegistry
 
@@ -25,7 +25,7 @@ class NewsTools(ABC):
 
 
 class HermesNativeTools(NewsTools):
-    """Native Python 16K Hermes Tool Calling Engine with zero external CLI dependencies."""
+    """Native bounded tool-calling engine with zero external CLI dependencies."""
 
     def __init__(
         self,
@@ -95,15 +95,15 @@ class HermesNativeTools(NewsTools):
             return [x.model_dump() for x in items]
 
     def search(self, query: str, limit: int = 8) -> list[SearchResult]:
-        """Search fresh news using the registered 16K tool suite."""
+        """Search fresh news using the registered bounded tool suite."""
         return self.extension_tools.search(query, limit)
 
     def extract(self, url: str) -> Evidence:
-        """Extract evidence from URL using the registered 16K tool suite."""
+        """Extract evidence from URL using the registered bounded tool suite."""
         return self.extension_tools.extract(url)
 
     def ask(self, prompt: str, max_turns: int = 4) -> dict[str, Any]:
-        """Execute a multi-turn tool-calling request using the 16k Hermes engine."""
+        """Execute a multi-turn request using the bounded native caller."""
         result = self.caller.run(prompt, max_turns=max_turns)
         if result.parsed_json:
             return result.parsed_json
@@ -111,7 +111,7 @@ class HermesNativeTools(NewsTools):
 
 
 class HermesCLITools(NewsTools):
-    """Stable integration through Hermes' documented CLI with fallback to native 16K caller."""
+    """Stable Hermes CLI integration with fallback to the bounded native caller."""
     def __init__(self, settings: Settings, extension_tools: ChromeExtensionWebTools | None = None):
         self.s = settings
         self.extension_tools = extension_tools or ChromeExtensionWebTools()
@@ -192,7 +192,7 @@ class DirectWebTools(NewsTools):
                     url = entry.get("link", "")
                     source = entry.get("source", {}).get("title", "Google News")
                     if url:
-                        self._source_meta[url] = (source, False)
+                        self._source_meta[url] = (source, False, snippet, title)
                         haystack = f"{title} {snippet}".lower()
                         score = sum(term in haystack for term in terms) + 5
                         ranked.append((score, SearchResult(title=title, url=url, snippet=snippet, published_at=pub_str, source=source)))
@@ -206,7 +206,7 @@ class DirectWebTools(NewsTools):
             response.raise_for_status()
             return source, primary, feedparser.parse(response.content)
 
-        with ThreadPoolExecutor(max_workers=len(self.FEEDS)) as pool:
+        with ThreadPoolExecutor(max_workers=min(4, len(self.FEEDS))) as pool:
             futures = [pool.submit(fetch, feed) for feed in self.FEEDS]
             for future in as_completed(futures):
                 try: source, primary, parsed = future.result()
@@ -228,7 +228,7 @@ class DirectWebTools(NewsTools):
                     if not score: continue
                     url = entry.get("link", "")
                     if not url: continue
-                    self._source_meta[url] = (source, primary)
+                    self._source_meta[url] = (source, primary, snippet, title)
                     ranked.append((score, SearchResult(title=title, url=url, snippet=snippet, published_at=pub_str, source=source)))
 
         ranked.sort(key=lambda x: x[0], reverse=True)
@@ -239,20 +239,46 @@ class DirectWebTools(NewsTools):
             seen.add(item.url)
             results.append(item)
             if len(results) >= limit: break
+        trim_process_memory()
         return results
 
     def extract(self, url: str) -> Evidence:
+        meta = self._source_meta.get(url)
+        source = meta[0] if meta else urlparse(url).netloc.removeprefix("www.")
+        primary = meta[1] if meta else False
+        cached_snippet = meta[2] if meta and len(meta) > 2 else ""
+        cached_title = meta[3] if meta and len(meta) > 3 else ""
         try:
             response = httpx.get(url, follow_redirects=True, timeout=15, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
             soup = BeautifulSoup(response.text, "html.parser")
             for tag in soup(["script", "style", "nav", "footer", "aside"]): tag.decompose()
-            title = soup.title.get_text(" ", strip=True) if soup.title else ""
+            title = soup.title.get_text(" ", strip=True) if soup.title else (cached_title or "")
             text = " ".join((soup.find("article") or soup).stripped_strings)[:3500]
-            source, primary = self._source_meta.get(url, (urlparse(str(response.url)).netloc, False))
-            return Evidence(url=str(response.url), title=title, publisher=source, excerpt=text or title, claims=[], primary=primary,
-                            canonical_origin=urlparse(str(response.url)).netloc.removeprefix("www."))
+            if len(text.strip()) < 50 and cached_snippet:
+                text = cached_snippet
+            resp_source, resp_primary = self._source_meta.get(url, (urlparse(str(response.url)).netloc, False))[:2]
+            ev = Evidence(
+                url=str(response.url),
+                title=title or cached_title,
+                publisher=resp_source,
+                excerpt=text or cached_snippet or title or "Breaking news article content",
+                claims=[],
+                primary=resp_primary,
+                canonical_origin=urlparse(str(response.url)).netloc.removeprefix("www.")
+            )
+            trim_process_memory()
+            return ev
         except Exception as exc:
-            return Evidence(url=url, title=url, publisher="Web Source", excerpt="Breaking news article content", claims=[], primary=False, canonical_origin=urlparse(url).netloc.removeprefix("www."))
+            trim_process_memory()
+            return Evidence(
+                url=url,
+                title=cached_title or url,
+                publisher=source or "Web Source",
+                excerpt=cached_snippet or "Breaking news article content",
+                claims=[],
+                primary=primary,
+                canonical_origin=urlparse(url).netloc.removeprefix("www.")
+            )
 
 
 class ChromeExtensionWebTools(NewsTools):

@@ -17,7 +17,7 @@ record = {
     "status": "QUEUED_FOR_PUBLISHING",
     "platform_status": {
         "x": "PENDING",
-        "threads": "PENDING",
+        "threads": "PENDING" if s.threads_publish_enabled else "PAUSED",
         "youtube": "PENDING"
     },
     "story": {
@@ -67,5 +67,5 @@ record = {
 
 s.queue_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
 print(f"[SUCCESS] Draft queued for publishing in {s.queue_path}")
-print("Status: QUEUED_FOR_PUBLISHING")
-print("Target Platforms: X, Threads, YouTube Studio (PRIVATE)")
+threads_info = "Threads" if s.threads_publish_enabled else "Threads (PAUSED)"
+print(f"Target Platforms: X, {threads_info}, YouTube Studio (PRIVATE)")

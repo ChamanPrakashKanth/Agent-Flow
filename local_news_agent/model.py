@@ -36,6 +36,18 @@ def count_messages_tokens(messages: list[dict[str, Any]]) -> int:
     return tokens
 
 
+def trim_process_memory() -> None:
+    """Trigger Python garbage collection and trim Windows process working set."""
+    try:
+        import gc
+        gc.collect()
+        if os.name == "nt":
+            import ctypes
+            ctypes.windll.psapi.EmptyWorkingSet(ctypes.windll.kernel32.GetCurrentProcess())
+    except Exception:
+        pass
+
+
 class LocalModel:
     def __init__(self, settings: Settings):
         self.s = settings
@@ -52,7 +64,7 @@ class LocalModel:
                 "model": self.s.model_name,
                 "stream": False,
                 "messages": messages,
-                "keep_alive": "5m",
+                "keep_alive": self.s.ollama_keep_alive,
                 "options": {
                     "temperature": temperature,
                     "num_ctx": self.s.model_context_tokens,
@@ -90,18 +102,18 @@ class LocalModel:
         return ModelReply(data["choices"][0]["message"]["content"], prompt_tokens, completion_tokens)
 
     def unload_model(self) -> bool:
-        """Proactively unload model from Ollama VRAM to free GPU memory."""
-        if self.s.model_backend != "ollama":
-            return True
-        try:
-            httpx.post(
-                f"{self.s.model_base_url}/api/generate",
-                json={"model": self.s.model_name, "keep_alive": 0},
-                timeout=5,
-            )
-            return True
-        except Exception:
-            return False
+        """Proactively unload model from Ollama VRAM/RAM and trim OS working set."""
+        if self.s.model_backend == "ollama":
+            try:
+                httpx.post(
+                    f"{self.s.model_base_url}/api/generate",
+                    json={"model": self.s.model_name, "keep_alive": 0},
+                    timeout=5,
+                )
+            except Exception:
+                pass
+        trim_process_memory()
+        return True
 
     def chat(self, system: str, user: str, json_mode: bool = False, temperature: float = 0.1) -> ModelReply:
         messages = [
@@ -112,13 +124,45 @@ class LocalModel:
 
 
 def first_json(text: str) -> dict:
+    if not text:
+        raise ValueError("model returned empty response")
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    match = re.search(r"\{(?:[^{}]|\{[^{}]*\})*\}", text, re.S)
-    if not match:
-        raise ValueError("model returned no JSON object")
-    return json.loads(match.group(0))
+    start = text.find("{")
+    if start != -1:
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            c = text[i]
+            if escape:
+                escape = False
+                continue
+            if c == "\\":
+                escape = True
+                continue
+            if c == '"':
+                in_string = not in_string
+                continue
+            if not in_string:
+                if c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[start : i + 1]
+                        try:
+                            return json.loads(candidate)
+                        except Exception:
+                            pass
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            pass
+    raise ValueError("model returned no valid JSON object")
 
 

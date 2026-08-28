@@ -10,23 +10,27 @@ from ..schemas import Draft, Story
 
 
 class Publisher:
-    def __init__(self, mode: str, queue_path: Path): self.mode = mode; self.path = queue_path; self.path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, mode: str, queue_path: Path, threads_publish_enabled: bool = True):
+        self.mode = mode
+        self.path = queue_path
+        self.threads_publish_enabled = threads_publish_enabled
+        self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def submit(self, run_id: str, story: Story, draft: Draft) -> str:
         short = draft.youtube_short
         short_ready = bool(short and short.generated and short.video_path)
         platform_status = {
             "x": "PENDING",
-            "threads": "PENDING",
-            "youtube": "PENDING_PRIVATE" if short_ready else "FAILED_NO_VIDEO",
+            "threads": "PENDING" if self.threads_publish_enabled else "PAUSED",
+            "youtube": "DRAFT" if short_ready else "DRAFT_NOT_GENERATED",
         }
         initial_status = "QUEUED_FOR_PUBLISHING" if self.mode == "AUTO" else "PENDING_REVIEW"
         draft_artifacts = {
             "youtube_short": {
                 "status": "DRAFT_READY" if short_ready else "DRAFT_NOT_GENERATED",
                 "video_path": short.video_path if short else "",
-                "upload_allowed": short_ready,
-                "required_visibility": "PRIVATE",
+                "upload_allowed": False,
+                "required_visibility": "DRAFT_ONLY",
                 "public_publish_allowed": False,
             }
         }

@@ -13,6 +13,8 @@ data/shorts/
 logs/*.jsonl
 logs/*.log
 .tmp_*.py
-
-
-
+drafts/
+tools/
+*.docx
+~$*
+*.zip

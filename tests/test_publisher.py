@@ -51,7 +51,7 @@ def test_publish_requires_real_post_urls(tmp_path: Path):
         result = publish_one_due(settings)
     assert result["status"] == "PARTIALLY_POSTED"
     record = json.loads(settings.queue_path.read_text(encoding="utf-8"))
-    assert record["platform_status"] == {"x": "FAILED", "threads": "FAILED", "youtube": "FAILED"}
+    assert record["platform_status"] == {"x": "FAILED", "threads": "FAILED", "youtube": "DRAFT"}
 
 
 def test_publish_accepts_verified_platform_urls(tmp_path: Path):
@@ -64,9 +64,10 @@ def test_publish_accepts_verified_platform_urls(tmp_path: Path):
     }
     with patch("local_news_agent.publisher.hermes_browser.HermesComputerUsePublisher.publish_all", return_value=fake):
         result = publish_one_due(settings)
-    assert result["status"] == "POSTED_AND_PRIVATE_UPLOADED"
+    assert result["status"] == "POSTED"
     record = json.loads(settings.queue_path.read_text(encoding="utf-8"))
-    assert record["status"] == "POSTED_AND_PRIVATE_UPLOADED"
+    assert record["status"] == "POSTED"
+    assert record["platform_status"]["youtube"] == "DRAFT"
     assert "publish_claim_id" not in record
 
 
@@ -164,5 +165,74 @@ def test_direct_research_backend_does_not_bypass_hermes_publisher(tmp_path: Path
     }
     with patch("local_news_agent.publisher.hermes_browser.HermesComputerUsePublisher.publish_all", return_value=fake) as hermes:
         result = publish_one_due(settings)
-    assert result["status"] == "POSTED_AND_PRIVATE_UPLOADED"
+    assert result["status"] == "POSTED"
     hermes.assert_called_once()
+
+
+def test_extension_publish_backend_never_starts_hermes(tmp_path: Path):
+    settings = Settings(
+        publish_mode="AUTO",
+        publish_backend="extension",
+        queue_path=tmp_path / "queue.jsonl",
+        database_path=tmp_path / "agent.db",
+        trajectory_path=tmp_path / "trajectory.jsonl",
+        shorts_dir=tmp_path / "shorts",
+    )
+    _queue_verified(settings)
+    fake = {
+        "x": {"status": "POSTED", "url": "https://x.com/ChamanKant44703/status/123"},
+        "threads": {"status": "POSTED", "url": "https://www.threads.com/@chamanprakashkanth/post/ABC"},
+        "youtube": {"status": "PRIVATE", "url": "https://youtu.be/AbCdEf12345"},
+    }
+    with patch("local_news_agent.publisher.hermes_browser.ChromeExtensionPublisher.publish_all", return_value=fake) as extension, \
+         patch("local_news_agent.publisher.hermes_browser.HermesComputerUsePublisher.publish_all") as hermes:
+        result = publish_one_due(settings)
+    assert result["status"] == "POSTED"
+    extension.assert_called_once()
+    hermes.assert_not_called()
+
+
+def test_threads_publish_can_be_paused(tmp_path: Path):
+    settings = Settings(
+        publish_mode="AUTO",
+        publish_backend="extension",
+        threads_publish_enabled=False,
+        queue_path=tmp_path / "queue.jsonl",
+        database_path=tmp_path / "agent.db",
+        trajectory_path=tmp_path / "trajectory.jsonl",
+        shorts_dir=tmp_path / "shorts",
+    )
+    _queue_verified(settings)
+    fake = {
+        "x": {"status": "POSTED", "url": "https://x.com/ChamanKant44703/status/123"},
+        "threads": {"status": "PAUSED", "url": "", "message": "Threads publishing paused"},
+        "youtube": {"status": "PRIVATE", "url": "https://youtu.be/AbCdEf12345"},
+    }
+    with patch("local_news_agent.publisher.hermes_browser.ChromeExtensionPublisher.publish_all", return_value=fake):
+        result = publish_one_due(settings)
+    assert result["platforms"]["threads"]["status"] == "PAUSED"
+    assert result["platforms"]["threads"]["url"] == ""
+    assert result["status"] == "POSTED"
+
+
+def test_extension_publisher_skips_paused_threads(tmp_path: Path):
+    from local_news_agent.publisher.extension_bridge import ChromeExtensionPublisher
+    from unittest.mock import AsyncMock
+    publisher = ChromeExtensionPublisher(token_path=tmp_path / "token")
+    (tmp_path / "token").write_text("dummy-token-for-test-purposes-1234567890", encoding="utf-8")
+    record = {
+        "platform_status": {"x": "POSTED", "threads": "PAUSED", "youtube": "PRIVATE"},
+        "draft": {"x": "X text", "threads": "Threads text", "youtube_short": {}},
+    }
+    with patch.object(publisher, "_send_command_async", new_callable=AsyncMock) as mock_send:
+        result = publisher.publish_all(record)
+        assert result.get("threads", {}).get("status") == "PAUSED"
+        mock_send.assert_not_called()
+
+
+def test_publisher_submit_marks_threads_paused_when_disabled(tmp_path: Path):
+    queue_file = tmp_path / "queue.jsonl"
+    pub = Publisher("AUTO", queue_file, threads_publish_enabled=False)
+    pub.submit("run-paused", Story(headline="Test"), Draft(x="X", threads="Threads", verified=True))
+    record = json.loads(queue_file.read_text(encoding="utf-8"))
+    assert record["platform_status"]["threads"] == "PAUSED"

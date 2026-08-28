@@ -22,7 +22,11 @@ def write(model: LocalModel, story: Story, token_sink=None) -> Draft:
     reply = model.chat(SYSTEM, json.dumps(payload, ensure_ascii=False), json_mode=True, temperature=.25)
     if token_sink:
         token_sink.tokens_prompt += reply.prompt_tokens; token_sink.tokens_completion += reply.completion_tokens
-    data = first_json(reply.text)
+    try:
+        data = first_json(reply.text)
+    except Exception:
+        clean_text = reply.text.strip()
+        data = {"x": clean_text[:280], "threads": clean_text[:900]}
     x = str(data.get("x", "")).strip()[:280] or story.headline[:280]
     threads = str(data.get("threads", "")).strip()[:900] or f"{story.headline}. {story.event or ''}".strip()[:900]
 

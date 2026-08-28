@@ -37,9 +37,14 @@ class HermesComputerUsePublisher:
             platform: record.get("platform_status", {}).get(platform) not in {"POSTED", "PRIVATE"}
             for platform in ("x", "threads", "youtube")
         }
+        threads_enabled = (
+            pending["threads"]
+            and self.settings.threads_publish_enabled
+            and record.get("platform_status", {}).get("threads") != "PAUSED"
+        )
         payload = {
             "x": {"enabled": pending["x"], "text": str(draft.get("x", ""))},
-            "threads": {"enabled": pending["threads"], "text": str(draft.get("threads", ""))},
+            "threads": {"enabled": threads_enabled, "text": str(draft.get("threads", ""))},
             "youtube": {
                 "enabled": pending["youtube"],
                 "video_path": self._video_path(record) if pending["youtube"] else "",

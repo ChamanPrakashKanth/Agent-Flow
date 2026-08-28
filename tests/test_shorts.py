@@ -51,13 +51,13 @@ def test_shorts_draft_in_queue(tmp_path: Path):
     assert records[0]["platform_status"] == {
         "x": "PENDING",
         "threads": "PENDING",
-        "youtube": "PENDING_PRIVATE",
+            "youtube": "DRAFT",
     }
     assert records[0]["draft_artifacts"]["youtube_short"] == {
         "status": "DRAFT_READY",
         "video_path": "data/shorts/short_test.mp4",
-        "upload_allowed": True,
-        "required_visibility": "PRIVATE",
+            "upload_allowed": False,
+            "required_visibility": "DRAFT_ONLY",
         "public_publish_allowed": False,
     }
     assert records[0]["draft"]["youtube_short"]["generated"] is True

@@ -17,7 +17,7 @@ function connectWebSocket() {
         clearInterval(reconnectTimer);
         reconnectTimer = null;
       }
-      socket.send(JSON.stringify({ type: "REGISTER_EXTENSION", protocol: 5, version: chrome.runtime.getManifest().version }));
+      socket.send(JSON.stringify({ type: "REGISTER_EXTENSION", protocol: 5 }));
     };
 
     socket.onmessage = async (event) => {

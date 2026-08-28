@@ -24,6 +24,7 @@ class ChromeExtensionPublisher:
             return {"success": False, "error": "BRIDGE_TOKEN_MISSING"}
         token = self.token_path.read_text(encoding="utf-8").strip()
         for attempt in range(5):
+            command_sent = False
             try:
                 async with websockets.connect(self.uri, open_timeout=2.0, max_size=50 * 1024 * 1024) as ws:
                     await ws.send(json.dumps({"type": "REGISTER_AGENT", "token": token}))
@@ -41,13 +42,18 @@ class ChromeExtensionPublisher:
                         "action": action,
                         "payload": payload
                     }))
+                    command_sent = True
 
                     res_raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
                     response = json.loads(res_raw)
                     if response.get("id") != req_id:
                         return {"success": False, "error": "BRIDGE_RESPONSE_ID_MISMATCH"}
                     return response
-            except Exception as exc:
+            except Exception:
+                # The browser may still complete a mutation after a late or
+                # lost acknowledgement. Never resend a command once sent.
+                if command_sent:
+                    return {"success": False, "error": "COMMAND_RESULT_UNKNOWN_NO_RETRY"}
                 await asyncio.sleep(1.0)
 
         return {
@@ -63,7 +69,7 @@ class ChromeExtensionPublisher:
             # 1. Publish to X
             x_text = draft.get("x", "")
             if x_text and draft_record.get("platform_status", {}).get("x") != "POSTED":
-                res = await self._send_command_async("PUBLISH_X", {"text": x_text})
+                res = await self._send_command_async("PUBLISH_X", {"text": x_text}, timeout=180.0)
                 results["x"] = {
                     "status": "POSTED" if res.get("success") else "FAILED",
                     "url": str(res.get("url", "")),
@@ -71,9 +77,16 @@ class ChromeExtensionPublisher:
                 }
 
             # 2. Publish to Threads
+            threads_status = draft_record.get("platform_status", {}).get("threads")
             threads_text = draft.get("threads", "")
-            if threads_text and draft_record.get("platform_status", {}).get("threads") != "POSTED":
-                res = await self._send_command_async("PUBLISH_THREADS", {"text": threads_text})
+            if threads_status == "PAUSED":
+                results["threads"] = {
+                    "status": "PAUSED",
+                    "url": "",
+                    "message": "Threads publishing paused"
+                }
+            elif threads_text and threads_status != "POSTED":
+                res = await self._send_command_async("PUBLISH_THREADS", {"text": threads_text}, timeout=180.0)
                 results["threads"] = {
                     "status": "POSTED" if res.get("success") else "FAILED",
                     "url": str(res.get("url", "")),

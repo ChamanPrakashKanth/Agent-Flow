@@ -8,7 +8,13 @@ def tokenize(text: str) -> set[str]: return {w for w in re.findall(r"[a-z0-9]+",
 
 
 def independent_sources(story: Story) -> int:
-    return len({e.canonical_origin or re.sub(r"^www\.", "", re.sub(r"^https?://", "", e.url).split("/")[0]) for e in story.evidence})
+    origins = set()
+    for e in story.evidence:
+        origin = e.canonical_origin or re.sub(r"^www\.", "", re.sub(r"^https?://", "", e.url).split("/")[0])
+        if origin in {"news.google.com", "google.com"} and e.publisher and e.publisher not in {"Google News", "Web Source"}:
+            origin = e.publisher.lower()
+        origins.add(origin)
+    return len(origins)
 
 
 def verify_story(story: Story) -> Story:

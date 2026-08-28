@@ -1,4 +1,4 @@
-"""Native Nous Hermes 16K Tool Caller and news research adapters."""
+"""Compact Nous-style tool-call parser and news research adapters."""
 
 from .caller import (
     ContextBudgetManager,
@@ -33,5 +33,4 @@ __all__ = [
     "HermesNativeTools",
     "NewsTools",
 ]
-
 

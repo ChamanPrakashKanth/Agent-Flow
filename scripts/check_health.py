@@ -17,8 +17,10 @@ print(f"Model: {settings.model_backend} / {settings.model_name}")
 print(f"KV Cache: {settings.ollama_kv_cache_type} (Flash Attention: {settings.ollama_flash_attention})")
 print(f"Working Memory: Budget={settings.memory_budget_nodes} nodes, Threshold={settings.memory_consolidation_threshold}")
 print(f"Publishing: {settings.publish_mode}; limit={settings.daily_publish_limit}")
+print(f"Threads publishing: {'enabled' if settings.threads_publish_enabled else 'PAUSED'}")
 print(f"X: {settings.x_profile_url}")
 print(f"Threads: {settings.threads_profile_url}")
+print(f"Pexels Video API: {'configured' if settings.pexels_api_key else 'not configured (using ambient background)'}")
 
 database = Path(settings.database_path)
 if database.exists():

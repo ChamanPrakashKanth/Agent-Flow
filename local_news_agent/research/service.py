@@ -13,16 +13,21 @@ def atomic_facts(text: str, limit: int = 6) -> list[str]:
 
 def story_from_evidence(result: SearchResult, evidence: Evidence) -> Story:
     facts = evidence.claims or atomic_facts(evidence.excerpt)
+    if not facts and result.snippet:
+        facts = atomic_facts(result.snippet) or ([result.snippet[:500]] if len(result.snippet.strip()) >= 20 else [])
+    if not facts and (result.title or evidence.title):
+        facts = [result.title or evidence.title]
     event = facts[0] if facts else result.snippet[:500]
+    has_facts = bool(facts)
     return Story(
         headline=result.title or evidence.title,
         event=event,
         published_at=evidence.published_at or result.published_at,
         sources=[evidence.url],
         key_facts=facts,
-        confidence=.64 if facts else .2,
+        confidence=.64 if has_facts else .2,
         importance=score_importance(result.title, event),
-        verification_status=VerificationStatus.PARTIALLY_CONFIRMED if facts else VerificationStatus.UNVERIFIED,
+        verification_status=VerificationStatus.PARTIALLY_CONFIRMED if has_facts else VerificationStatus.UNVERIFIED,
         evidence=[evidence],
         fingerprint=fingerprint(event or result.title, evidence.published_at or result.published_at)
     )
@@ -64,7 +69,11 @@ def merge_evidence(story: Story, evidence: Evidence) -> Story:
     story.evidence.append(evidence)
     for fact in evidence.claims or atomic_facts(evidence.excerpt):
         if fact not in story.key_facts: story.key_facts.append(fact)
-    origins = {e.canonical_origin or urlsplit(e.url).netloc.removeprefix("www.") for e in story.evidence}
+    origins = {
+        e.publisher.lower() if (e.canonical_origin or urlsplit(e.url).netloc.removeprefix("www.")) in {"news.google.com", "google.com"} and e.publisher and e.publisher not in {"Google News", "Web Source"}
+        else (e.canonical_origin or urlsplit(e.url).netloc.removeprefix("www."))
+        for e in story.evidence
+    }
     if len(origins) >= 2:
         story.confidence = min(.96, .58 + .14 * len(origins)); story.verification_status = VerificationStatus.CONFIRMED
     else:

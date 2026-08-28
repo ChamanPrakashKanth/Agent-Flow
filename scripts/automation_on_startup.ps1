@@ -40,7 +40,7 @@ try {
     $env:YOUTUBE_DRAFTS_ENABLED = 'true'
 
     "$(Get-Date -Format o) two startup-relative cycles scheduled: +15 minutes and four hours later" | Add-Content -LiteralPath $logFile
-    "$(Get-Date -Format o) policy: Hermes existing Chrome; X/Threads public; YouTube PRIVATE only" | Add-Content -LiteralPath $logFile
+    "$(Get-Date -Format o) policy: forked toolcaller + Chrome extension; X/Threads public; YouTube PRIVATE only" | Add-Content -LiteralPath $logFile
 
     Start-Sleep -Seconds 900
     for ($cycle = 1; $cycle -le 2; $cycle++) {

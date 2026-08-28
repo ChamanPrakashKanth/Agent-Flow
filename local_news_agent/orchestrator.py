@@ -57,7 +57,10 @@ class NewsAgent:
                        chosen.already_covered if chosen else False, len(state.draft.unsupported_claims) if state.draft else 0, state.step, bool(state.errors))
         self.log.log(task=state.task, run_id=state.run_id, state=state.compact(), action=None, tool=None, observation=None, compressed_observation=None,
                      next_state=None, final_result=state.final_result, reward=score, metrics=metrics)
-        self.memory.save_run(state.run_id, state.final_result, {**metrics, "reward": score}); return state
+        self.memory.save_run(state.run_id, state.final_result, {**metrics, "reward": score})
+        if hasattr(self.planner, "model") and hasattr(self.planner.model, "unload_model"):
+            self.planner.model.unload_model()
+        return state
 
     def _index(self, target: str, size: int) -> int:
         try: i = int(target)
@@ -111,6 +114,8 @@ class NewsAgent:
             return f"history checked; duplicates={sum(x.already_covered for x in s.stories)}"
         if a.action == ActionName.SELECT_STORY:
             eligible = [(i, x) for i, x in enumerate(s.stories) if not x.already_covered and x.confidence >= self.s.min_confidence and x.importance >= self.s.min_importance and x.verification_status == VerificationStatus.CONFIRMED]
+            if not eligible:
+                eligible = [(i, x) for i, x in enumerate(s.stories) if not x.already_covered and x.confidence >= self.s.min_confidence and x.importance >= self.s.min_importance]
             if not eligible: s.final_result = "NO_POST"; return "no eligible story"
             s.selected_index = max(eligible, key=lambda pair: (pair[1].importance, pair[1].confidence))[0]
             self.working_memory.reinforce_selected(s.stories[s.selected_index].headline)
@@ -126,6 +131,8 @@ class NewsAgent:
             if s.selected_index is None or not s.draft or not s.draft.verified: s.final_result = "NO_POST"; return "unsafe draft rejected"
             if self.memory.queued_today() >= self.s.daily_publish_limit: s.final_result = "NO_POST"; return "daily limit reached"
             if self.s.youtube_shorts_enabled and s.draft.youtube_short and not s.draft.youtube_short.generated:
+                if hasattr(self.planner, "model") and hasattr(self.planner.model, "unload_model"):
+                    self.planner.model.unload_model()
                 try:
                     s.draft.youtube_short = self.shorts.create_short(s.draft.youtube_short, s.run_id)
                 except Exception as exc:

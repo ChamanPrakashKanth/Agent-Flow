@@ -4,13 +4,15 @@ $agentExe = Join-Path $projectRoot '.venv\Scripts\news-agent.exe'
 $logDirectory = Join-Path $projectRoot 'logs'
 $logFile = Join-Path $logDirectory 'autostart.log'
 $automationWorker = Join-Path $PSScriptRoot 'automation_on_startup.ps1'
+$extensionRelay = Join-Path $PSScriptRoot 'start_extension_bridge.py'
+$pythonExe = Join-Path $projectRoot '.venv\Scripts\python.exe'
 
 # Low-memory Ollama optimization profile for 4GB VRAM (GTX 1650) / 6GB RAM
 $env:OLLAMA_FLASH_ATTENTION = '1'
 $env:OLLAMA_KV_CACHE_TYPE = 'q4_0'
 $env:OLLAMA_NUM_PARALLEL = '1'
 $env:OLLAMA_MAX_LOADED_MODELS = '1'
-$env:OLLAMA_KEEP_ALIVE = '5m'
+$env:OLLAMA_KEEP_ALIVE = '0'
 
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 Set-Location -LiteralPath $projectRoot
@@ -56,10 +58,38 @@ if ($ollamaReady) {
     "$(Get-Date -Format o) Ollama is starting; worker will recheck after the startup delay" | Add-Content -LiteralPath $logFile
 }
 
+# The extension lives in the user's normal Chrome profile. Start that profile
+# minimized when Chrome is not already running; never create an isolated profile.
+if (-not (Get-Process -Name chrome -ErrorAction SilentlyContinue)) {
+    $chromeCandidates = @(
+        "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+        "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+    )
+    $chromeExe = $chromeCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if ($chromeExe) {
+        Start-Process -FilePath $chromeExe -ArgumentList @('--start-minimized', 'about:blank') -WindowStyle Minimized
+        "$(Get-Date -Format o) started existing Chrome profile minimized for extension access" | Add-Content -LiteralPath $logFile
+        Start-Sleep -Seconds 3
+    }
+}
+
+# The forked publishing case uses the user's authenticated extension directly,
+# so no Hermes model or 64K browser-agent context is allocated.
+$bridgeReady = $false
+try {
+    $bridgeReady = Test-NetConnection -ComputerName '127.0.0.1' -Port 8765 -InformationLevel Quiet -WarningAction SilentlyContinue
+} catch { }
+if (-not $bridgeReady -and (Test-Path -LiteralPath $pythonExe) -and (Test-Path -LiteralPath $extensionRelay)) {
+    $quotedExtensionRelay = '"{0}"' -f $extensionRelay
+    Start-Process -FilePath $pythonExe -ArgumentList @($quotedExtensionRelay) -WorkingDirectory $projectRoot -WindowStyle Hidden
+    "$(Get-Date -Format o) started authenticated Chrome extension relay" | Add-Content -LiteralPath $logFile
+}
+
 if (Test-Path -LiteralPath $automationWorker) {
     $quotedAutomationWorker = '"{0}"' -f $automationWorker
     Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $quotedAutomationWorker) -WindowStyle Hidden
-    "$(Get-Date -Format o) started two-cycle Hermes Computer Use worker using the signed-in Chrome profile" | Add-Content -LiteralPath $logFile
+    "$(Get-Date -Format o) started two-cycle extension worker using the signed-in Chrome profile" | Add-Content -LiteralPath $logFile
 } else {
     "$(Get-Date -Format o) automation worker missing: $automationWorker" | Add-Content -LiteralPath $logFile
     exit 1

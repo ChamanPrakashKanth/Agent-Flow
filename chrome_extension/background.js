@@ -1,68 +1,8 @@
 // Local News Agent - authenticated X/Threads + private YouTube executor.
-const WS_URL = "ws://127.0.0.1:8765";
 const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
 const X_PROFILE = "https://x.com/ChamanKant44703";
 const THREADS_PROFILE = "https://www.threads.com/@chamanprakashkanth";
 const YOUTUBE_STUDIO = "https://studio.youtube.com/";
-
-let directSocket = null;
-let reconnectTimer = null;
-
-function connectDirectWebSocket() {
-  if (directSocket && (directSocket.readyState === WebSocket.OPEN || directSocket.readyState === WebSocket.CONNECTING)) {
-    return;
-  }
-  try {
-    directSocket = new WebSocket(WS_URL);
-
-    directSocket.onopen = () => {
-      console.log("[NewsAgent Service Worker] Directly connected to local relay on port 8765");
-      if (reconnectTimer) {
-        clearInterval(reconnectTimer);
-        reconnectTimer = null;
-      }
-      directSocket.send(JSON.stringify({
-        type: "REGISTER_EXTENSION",
-        protocol: 5,
-        version: chrome.runtime.getManifest().version
-      }));
-    };
-
-    directSocket.onmessage = async (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        if (message.type === "COMMAND") {
-          console.log("[NewsAgent Service Worker] Executing command:", message.action);
-          const response = await handleCommand(message);
-          if (directSocket && directSocket.readyState === WebSocket.OPEN) {
-            directSocket.send(JSON.stringify(response));
-          }
-        }
-      } catch (err) {
-        console.error("[NewsAgent Service Worker] Command dispatch error:", err);
-      }
-    };
-
-    directSocket.onclose = () => {
-      scheduleDirectReconnect();
-    };
-
-    directSocket.onerror = () => {
-      try { directSocket.close(); } catch(e) {}
-    };
-  } catch (e) {
-    scheduleDirectReconnect();
-  }
-}
-
-function scheduleDirectReconnect() {
-  if (!reconnectTimer) {
-    reconnectTimer = setInterval(connectDirectWebSocket, 2000);
-  }
-}
-
-connectDirectWebSocket();
-setInterval(connectDirectWebSocket, 5000);
 
 async function ensureOffscreenDocument() {
   try {
@@ -86,16 +26,13 @@ async function ensureOffscreenDocument() {
 }
 
 chrome.runtime.onStartup.addListener(() => {
-  connectDirectWebSocket();
   ensureOffscreenDocument();
 });
 chrome.runtime.onInstalled.addListener(() => {
-  connectDirectWebSocket();
   ensureOffscreenDocument();
 });
 chrome.alarms.create("offscreenKeepAlive", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener(() => {
-  connectDirectWebSocket();
   ensureOffscreenDocument();
 });
 ensureOffscreenDocument();
@@ -182,46 +119,51 @@ async function composeX(tabId, text) {
   await chrome.tabs.update(tabId, { url: "https://x.com/compose/post", active: false });
   await waitForTabLoad(tabId);
   await sleep(2500);
+  const focused = await executeInTab(tabId, () => {
+    const box = document.querySelector('[data-testid="tweetTextarea_0"]');
+    if (!box) return false;
+    box.focus();
+    return true;
+  });
+  if (!focused) return { submitted: false, error: "X_COMPOSER_NOT_FOUND" };
+  await insertTextWithDebugger(tabId, text);
   const result = await chrome.scripting.executeScript({
     target: { tabId },
-    func: async (postText) => {
-      const box = document.querySelector('[data-testid="tweetTextarea_0"]');
-      if (!box) return { submitted: false, error: "X_COMPOSER_NOT_FOUND" };
-      box.focus();
-      document.execCommand("insertText", false, postText);
-      box.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: postText }));
+    func: async () => {
       await new Promise((resolve) => setTimeout(resolve, 1200));
-      const button = document.querySelector('[data-testid="tweetButton"]');
+      const button = document.querySelector('[data-testid="tweetButton"], [data-testid="tweetButtonInline"]');
       if (!button || button.getAttribute("aria-disabled") === "true" || button.disabled) {
         return { submitted: false, error: "X_POST_BUTTON_DISABLED" };
       }
       button.click();
       return { submitted: true, error: "" };
-    },
-    args: [text]
+    }
   });
   return result[0]?.result || { submitted: false, error: "X_SCRIPT_FAILED" };
 }
 
 async function composeThreads(tabId, text) {
-  await chrome.tabs.update(tabId, { url: "https://www.threads.net/", active: false });
+  await chrome.tabs.update(tabId, { url: "https://www.threads.com/", active: false });
   await waitForTabLoad(tabId);
   await sleep(3500);
+  const focused = await executeInTab(tabId, async () => {
+    const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const create = document.querySelector('[aria-label="Create"], [aria-label="New thread"], [aria-label="Start a thread..."], svg[aria-label="Create"]');
+    if (create) {
+      (create.closest('[role="button"]') || create.closest("a") || create).click();
+      await pause(2000);
+    }
+    const box = document.querySelector('[role="textbox"][contenteditable="true"], div[data-lexical-editor="true"]');
+    if (!box) return false;
+    box.focus();
+    return true;
+  });
+  if (!focused) return { submitted: false, error: "THREADS_COMPOSER_NOT_FOUND" };
+  await insertTextWithDebugger(tabId, text);
   const result = await chrome.scripting.executeScript({
     target: { tabId },
-    func: async (postText) => {
+    func: async () => {
       const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-      const create = document.querySelector('[aria-label="Create"], [aria-label="New thread"], [aria-label="Start a thread..."], svg[aria-label="Create"]');
-      if (create) {
-        (create.closest('[role="button"]') || create.closest("a") || create).click();
-        await pause(2000);
-      }
-      const box = document.querySelector('[role="textbox"][contenteditable="true"], div[data-lexical-editor="true"]');
-      if (!box) return { submitted: false, error: "THREADS_COMPOSER_NOT_FOUND" };
-      box.focus();
-      document.execCommand("selectAll", false, null);
-      document.execCommand("insertText", false, postText);
-      box.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: postText }));
       await pause(1500);
       const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
       const submit = buttons.find((node) => node.textContent.trim() === "Post" && node.getAttribute("aria-disabled") !== "true" && !node.disabled);
@@ -229,17 +171,16 @@ async function composeThreads(tabId, text) {
       submit.click();
       await pause(2500);
       return { submitted: true, error: "" };
-    },
-    args: [text]
+    }
   });
   return result[0]?.result || { submitted: false, error: "THREADS_SCRIPT_FAILED" };
 }
 
 async function publishVerified(id, platform, text) {
   const isX = platform === "x";
-  const profileUrl = isX ? X_PROFILE : (THREADS_PROFILE.replace("threads.com", "threads.net"));
+  const profileUrl = isX ? X_PROFILE : THREADS_PROFILE;
   const linkFragment = isX ? "/status/" : "/post/";
-  const tab = await chrome.tabs.create({ url: profileUrl, active: false });
+  const tab = await chrome.tabs.create({ url: profileUrl, active: true });
   try {
     await waitForTabLoad(tab.id);
     const existing = await findPostOnProfile(tab.id, profileUrl, text, linkFragment);
@@ -304,27 +245,32 @@ async function setFileInput(tabId, filePath) {
   const target = { tabId };
   await chrome.debugger.attach(target, "1.3");
   try {
-    const evaluated = await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
-      expression: "document.querySelector('input[type=file]')",
-      returnByValue: false,
+    const documentNode = await chrome.debugger.sendCommand(target, "DOM.getDocument", { depth: -1, pierce: true });
+    const requested = await chrome.debugger.sendCommand(target, "DOM.querySelector", {
+      nodeId: documentNode.root.nodeId,
+      selector: "input[type=file]",
     });
-    const objectId = evaluated?.result?.objectId;
-    if (!objectId) throw new Error("YOUTUBE_FILE_INPUT_NOT_FOUND");
-    const requested = await chrome.debugger.sendCommand(target, "DOM.requestNode", { objectId });
+    if (!requested.nodeId) throw new Error("YOUTUBE_FILE_INPUT_NOT_FOUND");
     await chrome.debugger.sendCommand(target, "DOM.setFileInputFiles", {
       files: [filePath],
       nodeId: requested.nodeId,
-    });
-    await chrome.debugger.sendCommand(target, "Runtime.callFunctionOn", {
-      objectId,
-      functionDeclaration: "function(){ this.dispatchEvent(new Event('input',{bubbles:true})); this.dispatchEvent(new Event('change',{bubbles:true})); }",
     });
   } finally {
     await chrome.debugger.detach(target).catch(() => {});
   }
 }
 
-async function findPrivateVideo(tabId, title) {
+async function insertTextWithDebugger(tabId, text) {
+  const target = { tabId };
+  await chrome.debugger.attach(target, "1.3");
+  try {
+    await chrome.debugger.sendCommand(target, "Input.insertText", { text });
+  } finally {
+    await chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
+async function findPrivateVideo(tabId, ...titles) {
   const contentUrl = await executeInTab(tabId, () => {
     const links = Array.from(document.querySelectorAll("a[href]"));
     const link = links.find((node) => /\/videos\/(upload|short)/.test(node.getAttribute("href") || ""))
@@ -335,14 +281,63 @@ async function findPrivateVideo(tabId, title) {
   await chrome.tabs.update(tabId, { url: contentUrl, active: false });
   await waitForTabLoad(tabId, 30000);
   await sleep(3500);
-  return await executeInTab(tabId, (expectedTitle) => {
+  return await executeInTab(tabId, (expectedTitles) => {
     const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+    const needles = expectedTitles.map(normalize).filter(Boolean);
+    const editLinks = Array.from(document.querySelectorAll('a[href*="/video/"][href*="/edit"]'));
+    for (const link of editLinks) {
+      let container = link;
+      for (let depth = 0; depth < 7 && container; depth++, container = container.parentElement) {
+        const haystack = normalize(`${link.getAttribute("aria-label") || ""} ${container.innerText || ""}`);
+        if (needles.some((needle) => haystack.includes(needle)) && haystack.includes("private")) {
+          return new URL(link.href, location.origin).href;
+        }
+      }
+    }
     const rows = Array.from(document.querySelectorAll("ytcp-video-row, tr"));
-    const row = rows.find((node) => normalize(node.innerText).includes(normalize(expectedTitle)) && /private/i.test(node.innerText));
+    const row = rows.find((node) => needles.some((needle) => normalize(node.innerText).includes(needle)) && /private/i.test(node.innerText));
     if (!row) return null;
     const link = row.querySelector('a[href*="/video/"], a[href*="youtu.be"], a[href*="youtube.com/watch"]');
     return link ? new URL(link.href, location.origin).href : null;
-  }, [title]);
+  }, [titles]);
+}
+
+async function replaceFocusedTextWithDebugger(tabId, text) {
+  const target = { tabId };
+  await chrome.debugger.attach(target, "1.3");
+  try {
+    await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+      type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2,
+    });
+    await chrome.debugger.sendCommand(target, "Input.dispatchKeyEvent", {
+      type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2,
+    });
+    await chrome.debugger.sendCommand(target, "Input.insertText", { text });
+  } finally {
+    await chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
+async function updateYouTubePrivateMetadata(tabId, editUrl, title, description) {
+  await chrome.tabs.update(tabId, { url: editUrl, active: true });
+  await waitForTabLoad(tabId, 30000);
+  const ready = await waitForPageCondition(tabId, () => Boolean(
+    document.querySelector("#title-textarea #textbox") && document.querySelector("#description-textarea #textbox")
+  ), [], 45000);
+  if (!ready) return false;
+  await executeInTab(tabId, () => document.querySelector("#title-textarea #textbox").focus());
+  await replaceFocusedTextWithDebugger(tabId, title);
+  await executeInTab(tabId, () => document.querySelector("#description-textarea #textbox").focus());
+  await replaceFocusedTextWithDebugger(tabId, description);
+  const saved = await waitForPageCondition(tabId, () => {
+    const button = document.querySelector("#save, #save-button, [aria-label='Save']");
+    if (!button || button.disabled || button.getAttribute("aria-disabled") === "true") return false;
+    button.click();
+    return true;
+  }, [], 30000);
+  if (!saved) return false;
+  await sleep(4000);
+  return true;
 }
 
 async function uploadYouTubePrivate(id, payload) {
@@ -350,13 +345,15 @@ async function uploadYouTubePrivate(id, payload) {
   if (visibility !== "PRIVATE") {
     return { id, type: "RESPONSE", success: false, error: "YOUTUBE_VISIBILITY_MUST_BE_PRIVATE" };
   }
-  const tab = await chrome.tabs.create({ url: YOUTUBE_STUDIO, active: false });
+  const fallbackTitle = String(filePath).split(/[\\/]/).pop().replace(/\.mp4$/i, "").replace(/[_-]+/g, " ");
+  const tab = await chrome.tabs.create({ url: YOUTUBE_STUDIO, active: true });
   try {
     await waitForTabLoad(tab.id, 30000);
     await sleep(4500);
 
-    const existing = await findPrivateVideo(tab.id, title);
+    const existing = await findPrivateVideo(tab.id, title, fallbackTitle);
     if (existing) {
+      await updateYouTubePrivateMetadata(tab.id, existing, title, description);
       return { id, type: "RESPONSE", success: true, already_uploaded: true, visibility: "PRIVATE", url: existing };
     }
 
@@ -448,8 +445,9 @@ async function uploadYouTubePrivate(id, payload) {
     await executeInTab(tab.id, () => (document.querySelector("#done-button, #save-button")).click());
 
     await sleep(5000);
-    const verifiedPrivateUrl = await findPrivateVideo(tab.id, title);
+    const verifiedPrivateUrl = await findPrivateVideo(tab.id, title, fallbackTitle);
     if (!verifiedPrivateUrl) return { id, type: "RESPONSE", success: false, error: "YOUTUBE_PRIVATE_UPLOAD_NOT_VERIFIED" };
+    await updateYouTubePrivateMetadata(tab.id, verifiedPrivateUrl, title, description);
     return { id, type: "RESPONSE", success: true, already_uploaded: false, visibility: "PRIVATE", url: verifiedPrivateUrl };
   } finally {
     chrome.tabs.remove(tab.id).catch(() => {});

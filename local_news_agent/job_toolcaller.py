@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,9 +28,14 @@ class JobToolResult:
 
 class CustomJobToolCaller(NewsTools):
     """
-    Dedicated, zero-Hermes custom toolcaller engineered for low-memory environments (4GB VRAM / 6GB RAM).
-    Operates with ultra-compact context (<=2048 tokens) and direct single-pass Python execution.
+    Project-specific fork of the tool-calling layer for low-memory machines.
+
+    Tool selection and execution are deterministic Python operations; Ollama is
+    used only for compact planning/writing. Browser publishing is handled by
+    the extension publisher and never enters Hermes' 64K agent loop.
     """
+
+    SUPPORTED_CASES = frozenset({"search_news", "extract_article", "verify_story", "generate_draft"})
 
     def __init__(
         self,
@@ -43,40 +49,64 @@ class CustomJobToolCaller(NewsTools):
         self.model = model or LocalModel(settings)
         self.memory = memory or MemoryStore(settings.database_path)
         self.direct_tools = direct_tools or DirectWebTools()
-        self.extension_tools = extension_tools or ChromeExtensionWebTools(fallback=self.direct_tools)
+        # Extension research is opt-in. The worker can always use direct RSS/web
+        # research even when Chrome has not opened yet.
+        self.extension_tools = extension_tools
 
-    def search(self, query: str, limit: int = 5) -> list[SearchResult]:
-        """Search fresh breaking news (last 24-48 hours) using Google News RSS and curated tech feeds."""
-        logger.info("CustomToolCaller: Searching fresh news for %r (limit=%d)", query, limit)
-        if self.extension_tools:
+    def call(self, case: str, **payload: Any) -> JobToolResult:
+        """Execute one bounded project case without a model-driven tool loop."""
+        if case not in self.SUPPORTED_CASES:
+            return JobToolResult(case, False, message="UNSUPPORTED_TOOL_CASE")
+        try:
+            if case == "search_news":
+                data = self._search_news(str(payload.get("query", "")), int(payload.get("limit", 5)))
+            elif case == "extract_article":
+                data = self._extract_article(str(payload.get("url", "")))
+            elif case == "verify_story":
+                data = self.verify_story_candidates(payload["story"])
+            else:
+                data = self.generate_draft(payload["story"], payload["state"])
+            return JobToolResult(case, True, data=data)
+        except Exception as exc:
+            logger.warning("Tool case %s failed safely: %s", case, type(exc).__name__)
+            return JobToolResult(case, False, message=f"{type(exc).__name__}: {str(exc)[:200]}")
+
+    def _search_news(self, query: str, limit: int) -> list[SearchResult]:
+        limit = max(1, min(8, limit))
+        if not query.strip():
+            return []
+        if self.extension_tools is not None:
             try:
-                raw_items = self.extension_tools.bridge.search_web(query, limit)
-                if raw_items:
-                    results: list[SearchResult] = []
-                    for item in raw_items:
-                        try:
-                            result = SearchResult.model_validate(item)
-                            if self.extension_tools._is_fresh(result.published_at):
-                                results.append(result)
-                        except Exception:
-                            continue
-                    if results:
-                        return results[:limit]
+                results = self.extension_tools.search(query, limit)
+                if results:
+                    return results[:limit]
             except Exception:
                 pass
         return self.direct_tools.search(query, limit=limit)
 
-    def extract(self, url: str) -> Evidence:
-        """Extract clean text and factual claims from article URL."""
-        logger.info("CustomToolCaller: Extracting content from %s", url)
-        if self.extension_tools:
+    def _extract_article(self, url: str) -> Evidence:
+        if not url.lower().startswith("https://"):
+            raise ValueError("HTTPS article URL required")
+        if self.extension_tools is not None:
             try:
-                raw_evidence = self.extension_tools.bridge.extract_page(url)
-                if raw_evidence and isinstance(raw_evidence, dict) and raw_evidence.get("excerpt"):
-                    return Evidence.model_validate(raw_evidence)
+                return self.extension_tools.extract(url)
             except Exception:
                 pass
         return self.direct_tools.extract(url)
+
+    def search(self, query: str, limit: int = 5) -> list[SearchResult]:
+        """Search fresh breaking news (last 24-48 hours) using Google News RSS and curated tech feeds."""
+        logger.info("CustomToolCaller: Searching fresh news for %r (limit=%d)", query, limit)
+        result = self.call("search_news", query=query, limit=limit)
+        return result.data if result.success else []
+
+    def extract(self, url: str) -> Evidence:
+        """Extract clean text and factual claims from article URL."""
+        logger.info("CustomToolCaller: Extracting content from %s", url)
+        result = self.call("extract_article", url=url)
+        if result.success:
+            return result.data
+        raise ValueError(result.message)
 
     def verify_story_candidates(self, story: Story) -> Story:
         """Verify story across independent canonical domains."""
@@ -94,9 +124,9 @@ class CustomJobToolCaller(NewsTools):
     def run_pipeline(self, topic: str) -> AgentState:
         """
         Execute full autonomous end-to-end news research, verification, and draft creation
-        with deterministic state transitions and zero OOM risk.
+        with deterministic state transitions and no Hermes runtime dependency.
         """
-        state = AgentState(task="research_current_news", topic=topic, run_id=f"job_{Path().stat().st_mtime_ns if hasattr(Path(), 'stat') else 1}")
+        state = AgentState(task="research_current_news", topic=topic, run_id=f"job_{uuid.uuid4().hex}")
         
         # 1. Search fresh breaking articles
         results = self.search(topic, limit=self.s.max_searches)
@@ -138,5 +168,8 @@ class CustomJobToolCaller(NewsTools):
         else:
             state.final_result = "NO_POST"
             state.errors.append("unsupported_claims_in_draft")
+
+        if hasattr(self.model, "unload_model"):
+            self.model.unload_model()
 
         return state

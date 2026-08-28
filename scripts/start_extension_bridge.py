@@ -196,7 +196,7 @@ async def relay_handler(websocket: Any) -> None:
 
 async def main() -> None:
     logging.info("Starting authenticated X/Threads/private-YouTube extension relay on ws://127.0.0.1:8765")
-    async with websockets.serve(relay_handler, "127.0.0.1", 8765, max_size=64 * 1024):
+    async with websockets.serve(relay_handler, "127.0.0.1", 8765, max_size=50 * 1024 * 1024):
         await asyncio.Future()
 
 

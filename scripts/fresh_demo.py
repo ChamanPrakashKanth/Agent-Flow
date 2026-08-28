@@ -43,3 +43,5 @@ draft.youtube_short = sc.create_short(draft.youtube_short, "fresh_live_demo")
 print(f"[SUCCESS] Rendered 1080x1920 MP4 Short: {draft.youtube_short.video_path}")
 print(f"Duration: {draft.youtube_short.duration_seconds}s | Subtitles: Strictly NONE")
 print("Publishing: DISABLED (local draft artifact only)")
+
+model.unload_model()

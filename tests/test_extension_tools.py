@@ -127,3 +127,33 @@ def test_chrome_extension_search_rejects_stale_results():
     with patch.object(ChromeExtensionPublisher, "search_web", return_value=stale):
         assert ChromeExtensionWebTools(fallback=fallback).search("AI", limit=5) == []
     fallback.search.assert_called_once_with("AI", 5)
+
+
+def test_hermes_cli_tools_delegates_to_chrome_extension():
+    from local_news_agent.config import Settings
+    from local_news_agent.hermes.tools import HermesCLITools
+
+    settings = Settings()
+    mock_ext = MagicMock(spec=ChromeExtensionWebTools)
+    mock_ext.search.return_value = [
+        SearchResult(title="Extension Found Story", url="https://ext.test", snippet="...", published_at="", source="Ext")
+    ]
+    mock_ext.extract.return_value = Evidence(
+        url="https://ext.test",
+        title="Extension Extracted Story",
+        publisher="Ext Publisher",
+        excerpt="Extension content",
+        canonical_origin="ext.test"
+    )
+
+    hermes_tools = HermesCLITools(settings, extension_tools=mock_ext)
+    # Simulate Hermes CLI failing or returning empty, triggering extension tool work
+    with patch.object(hermes_tools, "_ask", side_effect=RuntimeError("Hermes CLI unavailable")):
+        results = hermes_tools.search("Quantum", limit=3)
+        assert len(results) == 1
+        assert results[0].title == "Extension Found Story"
+        mock_ext.search.assert_called_once_with("Quantum", 3)
+
+        evidence = hermes_tools.extract("https://ext.test")
+        assert evidence.title == "Extension Extracted Story"
+        mock_ext.extract.assert_called_once_with("https://ext.test")

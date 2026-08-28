@@ -12,8 +12,9 @@ import feedparser
 import httpx
 from bs4 import BeautifulSoup
 from ..config import Settings
-from ..model import first_json
+from ..model import LocalModel, first_json
 from ..schemas import Evidence, SearchResult
+from .caller import HermesToolCaller, ToolRegistry
 
 
 class NewsTools(ABC):
@@ -23,9 +24,98 @@ class NewsTools(ABC):
     def extract(self, url: str) -> Evidence: ...
 
 
+class HermesNativeTools(NewsTools):
+    """Native Python 16K Hermes Tool Calling Engine with zero external CLI dependencies."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        model: LocalModel | None = None,
+        extension_tools: ChromeExtensionWebTools | None = None,
+        direct_tools: DirectWebTools | None = None,
+    ):
+        self.s = settings
+        self.direct_tools = direct_tools or DirectWebTools()
+        self.extension_tools = extension_tools or ChromeExtensionWebTools(fallback=self.direct_tools)
+        self.registry = ToolRegistry()
+        self._register_builtin_tools()
+        self.model = model or LocalModel(settings)
+        self.caller = HermesToolCaller(
+            model=self.model,
+            registry=self.registry,
+            settings=settings,
+        )
+
+    def _register_builtin_tools(self) -> None:
+        @self.registry.register(
+            name="web_search",
+            description="Search the web and breaking news feeds for fresh articles published in the last 24-48 hours.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search topic or query keywords"},
+                    "limit": {"type": "integer", "description": "Maximum results to return (1-8)", "default": 8},
+                },
+                "required": ["query"],
+            },
+        )
+        def _web_search(query: str, limit: int = 8) -> list[dict[str, Any]]:
+            items = self.extension_tools.search(query, limit=limit)
+            return [x.model_dump() for x in items]
+
+        @self.registry.register(
+            name="web_extract",
+            description="Extract readable text, factual claims, and metadata from an article URL.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Full HTTPS URL of the article to extract"},
+                },
+                "required": ["url"],
+            },
+        )
+        def _web_extract(url: str) -> dict[str, Any]:
+            ev = self.extension_tools.extract(url)
+            return ev.model_dump()
+
+        @self.registry.register(
+            name="browser_search",
+            description="Search web directly through Chrome Extension browser session.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search topic"},
+                    "limit": {"type": "integer", "description": "Max results", "default": 5},
+                },
+                "required": ["query"],
+            },
+        )
+        def _browser_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
+            items = self.extension_tools.search(query, limit=limit)
+            return [x.model_dump() for x in items]
+
+    def search(self, query: str, limit: int = 8) -> list[SearchResult]:
+        """Search fresh news using the registered 16K tool suite."""
+        return self.extension_tools.search(query, limit)
+
+    def extract(self, url: str) -> Evidence:
+        """Extract evidence from URL using the registered 16K tool suite."""
+        return self.extension_tools.extract(url)
+
+    def ask(self, prompt: str, max_turns: int = 4) -> dict[str, Any]:
+        """Execute a multi-turn tool-calling request using the 16k Hermes engine."""
+        result = self.caller.run(prompt, max_turns=max_turns)
+        if result.parsed_json:
+            return result.parsed_json
+        return {"response": result.final_text}
+
+
 class HermesCLITools(NewsTools):
-    """Stable integration through Hermes' documented one-shot CLI, not a private Python API."""
-    def __init__(self, settings: Settings): self.s = settings
+    """Stable integration through Hermes' documented CLI with fallback to native 16K caller."""
+    def __init__(self, settings: Settings, extension_tools: ChromeExtensionWebTools | None = None):
+        self.s = settings
+        self.extension_tools = extension_tools or ChromeExtensionWebTools()
+        self.native_tools = HermesNativeTools(settings, extension_tools=self.extension_tools)
 
     def _ask(self, prompt: str) -> dict:
         done = subprocess.run([self.s.hermes_command, "chat", "-q", prompt], text=True, capture_output=True,
@@ -34,13 +124,23 @@ class HermesCLITools(NewsTools):
         return first_json(done.stdout)
 
     def search(self, query: str, limit: int = 8) -> list[SearchResult]:
-        data = self._ask(f"Use web_search for fresh breaking news published in the last 24-48 hours about {query!r}. Return JSON only as {{\"results\":[{{\"title\":\"\",\"url\":\"\",\"snippet\":\"\",\"published_at\":\"\",\"source\":\"\"}}]}}. Maximum {limit}.")
-        return [SearchResult.model_validate(x) for x in data.get("results", [])[:limit]]
+        try:
+            data = self._ask(f"Use web_search for fresh breaking news published in the last 24-48 hours about {query!r}. Return JSON only as {{\"results\":[{{\"title\":\"\",\"url\":\"\",\"snippet\":\"\",\"published_at\":\"\",\"source\":\"\"}}]}}. Maximum {limit}.")
+            items = [SearchResult.model_validate(x) for x in data.get("results", [])[:limit]]
+            if items:
+                return items
+        except Exception:
+            pass
+        return self.native_tools.search(query, limit)
 
     def extract(self, url: str) -> Evidence:
-        data = self._ask(f"Use web_extract on {url}. Use browser tools only if extraction requires interaction. Return JSON only as {{\"url\":\"{url}\",\"title\":\"\",\"publisher\":\"\",\"published_at\":\"\",\"excerpt\":\"compact factual evidence under 2500 chars\",\"claims\":[\"atomic fact\"],\"primary\":false,\"canonical_origin\":\"\"}}.")
-        data["url"] = url
-        return Evidence.model_validate(data)
+        try:
+            data = self._ask(f"Use web_extract on {url}. Use browser tools only if extraction requires interaction. Return JSON only as {{\"url\":\"{url}\",\"title\":\"\",\"publisher\":\"\",\"published_at\":\"\",\"excerpt\":\"compact factual evidence under 2000 chars\",\"claims\":[\"atomic fact\"],\"primary\":false,\"canonical_origin\":\"\"}}.")
+            data["url"] = url
+            return Evidence.model_validate(data)
+        except Exception:
+            pass
+        return self.native_tools.extract(url)
 
 
 class DirectWebTools(NewsTools):

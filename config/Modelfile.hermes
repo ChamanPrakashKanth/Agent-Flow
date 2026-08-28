@@ -1,4 +1,5 @@
-FROM qwen3:4b-instruct
-PARAMETER num_ctx 65536
+FROM hermes3:3b
+PARAMETER num_ctx 16384
 PARAMETER temperature 0.1
+
 

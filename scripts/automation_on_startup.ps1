@@ -8,6 +8,19 @@ $mutex = New-Object System.Threading.Mutex($false, 'Local\LocalNewsAgentAutomati
 $ownsMutex = $false
 $topic = 'artificial intelligence, semiconductors, quantum mechanics, theoretical physics, defense engineering'
 
+function Wait-OllamaReady {
+    param([int]$Attempts = 60)
+    for ($attempt = 0; $attempt -lt $Attempts; $attempt++) {
+        try {
+            $null = Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2
+            return $true
+        } catch {
+            Start-Sleep -Seconds 2
+        }
+    }
+    return $false
+}
+
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 Set-Location -LiteralPath $projectRoot
 
@@ -26,31 +39,30 @@ try {
     $env:PUBLISH_MODE = 'AUTO'
     $env:YOUTUBE_DRAFTS_ENABLED = 'true'
 
-    "$(Get-Date -Format o) 24/7 autonomous background daemon active" | Add-Content -LiteralPath $logFile
-    "$(Get-Date -Format o) policy: X/Threads public; YouTube PRIVATE only; Budgeted Working Memory active" | Add-Content -LiteralPath $logFile
+    "$(Get-Date -Format o) two startup-relative cycles scheduled: +15 minutes and four hours later" | Add-Content -LiteralPath $logFile
+    "$(Get-Date -Format o) policy: Hermes existing Chrome; X/Threads public; YouTube PRIVATE only" | Add-Content -LiteralPath $logFile
 
-    # First, immediately drain any pending queue drafts
-    & $agentExe publish-due *>> $logFile
-
-    # Main continuous background loop: runs every 60 minutes indefinitely
-    while ($true) {
+    Start-Sleep -Seconds 900
+    for ($cycle = 1; $cycle -le 2; $cycle++) {
         try {
-            "$(Get-Date -Format o) starting automated research cycle..." | Add-Content -LiteralPath $logFile
-            & $agentExe run --topic $topic *>> $logFile
-
-            "$(Get-Date -Format o) checking and publishing verified drafts..." | Add-Content -LiteralPath $logFile
-            & $agentExe publish-due *>> $logFile
+            "$(Get-Date -Format o) starting startup cycle $cycle of 2" | Add-Content -LiteralPath $logFile
+            if (Wait-OllamaReady) {
+                & $agentExe run --topic $topic *>> $logFile
+                & $agentExe publish-due *>> $logFile
+            } else {
+                "$(Get-Date -Format o) Ollama unavailable; skipped cycle $cycle safely" | Add-Content -LiteralPath $logFile
+            }
         } catch {
-            "$(Get-Date -Format o) cycle error: $_" | Add-Content -LiteralPath $logFile
+            "$(Get-Date -Format o) cycle $cycle error: $_" | Add-Content -LiteralPath $logFile
         }
-
-        # Sleep for 1 hour (3600 seconds) before next automated research cycle
-        Start-Sleep -Seconds 3600
+        if ($cycle -eq 1) {
+            Start-Sleep -Seconds 14400
+        }
     }
+    "$(Get-Date -Format o) two startup-relative cycles finished" | Add-Content -LiteralPath $logFile
 } finally {
     if ($ownsMutex) {
         $mutex.ReleaseMutex()
     }
     $mutex.Dispose()
 }
-

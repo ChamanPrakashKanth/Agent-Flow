@@ -5,6 +5,7 @@ from local_news_agent.memory.budgeted_working_memory import (
     ConceptGraph,
     ConceptNode,
     Timescale,
+    stable_node_id,
 )
 from local_news_agent.schemas import AgentState
 
@@ -34,6 +35,14 @@ def test_retention_reinforcement():
     assert reinforced_retention > initial_retention
     assert node.access_count == 3
     assert node.last_accessed_step == 10
+
+
+def test_reinforcement_is_capped():
+    node = ConceptNode(id="1", text="Popular concept", category="fact", timescale=Timescale.LONG)
+    for step in range(100):
+        node.reinforce(current_step=step, weight=5)
+    assert node.importance == 5.0
+    assert node.access_count == 20
 
 
 def test_concept_graph_edges_and_diffusion():
@@ -80,6 +89,40 @@ def test_event_driven_consolidation_under_pressure():
     assert len(summary["consolidated_memories"]) > 0
 
 
+def test_ids_are_deterministic_and_source_sensitive():
+    assert stable_node_id("search", "https://example.test/a") == stable_node_id("search", "https://example.test/a")
+    assert stable_node_id("search", "https://example.test/a") != stable_node_id("search", "https://example.test/b")
+
+
+def test_consolidation_reduces_to_pressure_target_and_is_not_a_noop():
+    bwm = BudgetedWorkingMemory(budget_nodes=8, pressure_threshold=0.75)
+    for i in range(7):
+        bwm.ingest_search_result(f"Result {i}", f"Distinct evidence snippet {i}", f"https://example.test/{i}")
+    assert len(bwm.graph.nodes) == 6
+    assert bwm.total_consolidations == 1
+    assert bwm.consolidate_if_needed() is False
+    assert bwm.total_consolidations == 1
+
+
+def test_reingesting_confirmed_fact_reinforces_in_place():
+    bwm = BudgetedWorkingMemory(budget_nodes=8)
+    first = bwm.ingest_confirmed_fact("Headline", "Verified atomic fact", ["https://one.test"])
+    before = bwm.graph.nodes[first].access_count
+    second = bwm.ingest_confirmed_fact("Headline", "Verified atomic fact", ["https://two.test"])
+    assert first == second
+    assert len(bwm.graph.nodes) == 1
+    assert bwm.graph.nodes[first].access_count > before
+    assert bwm.graph.nodes[first].metadata["sources"] == ["https://one.test", "https://two.test"]
+
+
+def test_unverified_claim_is_not_labeled_confirmed():
+    bwm = BudgetedWorkingMemory()
+    node_id = bwm.ingest_evidence_claim("Headline", "Single-source statement", ["https://one.test"])
+    node = bwm.graph.nodes[node_id]
+    assert node.category == "evidence_claim"
+    assert node.timescale == Timescale.MEDIUM
+
+
 def test_agent_state_compact_with_budgeted_working_memory():
     """Verify AgentState.compact integrates working memory summary seamlessly."""
     bwm = BudgetedWorkingMemory(budget_nodes=6)
@@ -92,3 +135,19 @@ def test_agent_state_compact_with_budgeted_working_memory():
     assert "active_concepts" in compact_view["working_memory"]
     assert "memory_pressure" in compact_view["working_memory"]
     assert len(compact_view["working_memory"]["active_concepts"]) == 1
+
+
+def test_compact_prompt_bounds_raw_results_and_memory_nodes():
+    bwm = BudgetedWorkingMemory(budget_nodes=12, pressure_threshold=1.0)
+    state = AgentState(task="test_task", topic="AI", run_id="r1", working_memory=bwm)
+    from local_news_agent.schemas import SearchResult
+
+    for i in range(10):
+        result = SearchResult(title=f"Headline {i}", url=f"https://example.test/{i}", snippet="x" * 1000)
+        state.search_results.append(result)
+        bwm.ingest_search_result(result.title, result.snippet, result.url)
+
+    compact_view = state.compact()
+    assert len(compact_view["results"]) == 4
+    assert all("snippet" not in item for item in compact_view["results"])
+    assert len(compact_view["working_memory"]["active_concepts"]) <= 4

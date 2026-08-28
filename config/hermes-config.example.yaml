@@ -1,9 +1,8 @@
-# Merge this block into ~/.hermes/config.yaml. Hermes currently requires a
-# declared context of at least 64K even though this project's compact planner
-# normally uses 8K directly against Ollama.
+# Hermes tool configuration bounded to 16K tokens to prevent OOM
 model:
-  default: qwen2.5-coder:3b
+  default: hermes3:3b
   provider: custom
   base_url: http://localhost:11434/v1
-  context_length: 65536
+  context_length: 16384
+
 

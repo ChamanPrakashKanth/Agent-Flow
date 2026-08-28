@@ -7,9 +7,12 @@ __pycache__/
 artifacts/
 data/*.db
 data/*.jsonl
+data/*.json
 data/bridge.token
 data/shorts/
 logs/*.jsonl
 logs/*.log
+.tmp_*.py
+
 
 

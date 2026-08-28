@@ -92,15 +92,10 @@ def publish_one_due(settings: Settings) -> dict[str, Any]:
         _save(settings.queue_path, records)
 
     try:
-        if settings.tool_backend == "hermes":
-            try:
-                results = HermesComputerUsePublisher(settings).publish_all(record)
-            except Exception:
-                from .extension_bridge import ChromeExtensionPublisher
-                results = ChromeExtensionPublisher().publish_all(record)
-        else:
-            from .extension_bridge import ChromeExtensionPublisher
-            results = ChromeExtensionPublisher().publish_all(record)
+        # Research may use the direct RSS/web backend, but publishing is always
+        # routed through bounded Hermes Computer Use. Never silently fall back
+        # to the legacy localhost extension bridge.
+        results = HermesComputerUsePublisher(settings).publish_all(record)
     except Exception as exc:
         results = {platform: {"status": "FAILED", "url": "", "message": type(exc).__name__}
                    for platform in REQUIRED_PLATFORMS if record["platform_status"].get(platform) != "POSTED"}

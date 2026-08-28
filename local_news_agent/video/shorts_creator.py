@@ -139,46 +139,45 @@ $synth.Dispose()
         output_clip.parent.mkdir(parents=True, exist_ok=True)
         # Scale to fill 1080x1920 and center crop, no subtitles
         vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30"
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(clip_path),
-            "-t", str(duration),
-            "-vf", vf,
-            "-an",
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-pix_fmt", "yuv420p",
-            str(output_clip),
-        ]
-        try:
-            res = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            return res.returncode == 0 and output_clip.exists() and output_clip.stat().st_size > 1000
-        except Exception as exc:
-            logger.warning("Failed to normalize clip %s: %s", clip_path, exc)
-            return False
+        for vcodec in ("h264_nvenc", "libx264", "mpeg4"):
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(clip_path),
+                "-t", str(duration),
+                "-vf", vf,
+                "-an",
+                "-c:v", vcodec,
+                "-pix_fmt", "yuv420p",
+                str(output_clip),
+            ]
+            try:
+                res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if res.returncode == 0 and output_clip.exists() and output_clip.stat().st_size > 1000:
+                    return True
+            except Exception as exc:
+                logger.warning("Failed to normalize clip with %s: %s", vcodec, exc)
+        return False
 
     def _create_ambient_background(self, output_path: Path, duration: float) -> bool:
         """Generate a sleek, dynamic gradient 1080x1920 background without any subtitles or text."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        vf = (
-            f"testsrc2=size=1080x1920:rate=30,format=yuv420p,"
-            f"drawbox=x=0:y=0:w=1080:h=1920:color=black@0.65:t=fill"
-        )
-        cmd = [
-            "ffmpeg", "-y",
-            "-f", "lavfi", "-i", vf,
-            "-t", str(duration),
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-pix_fmt", "yuv420p",
-            str(output_path),
-        ]
-        try:
-            res = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            return res.returncode == 0 and output_path.exists()
-        except Exception as exc:
-            logger.warning("Failed to create ambient background: %s", exc)
-            return False
+        vf = "color=c=0x111827:s=1080x1920:r=30"
+        for vcodec in ("h264_nvenc", "libx264", "mpeg4"):
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "lavfi", "-i", vf,
+                "-t", str(duration),
+                "-c:v", vcodec,
+                "-pix_fmt", "yuv420p",
+                str(output_path),
+            ]
+            try:
+                res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if res.returncode == 0 and output_path.exists() and output_path.stat().st_size > 1000:
+                    return True
+            except Exception as exc:
+                logger.warning("Failed to create ambient background with %s: %s", vcodec, exc)
+        return False
 
     def assemble_video(self, audio_path: Path, clips: list[Path], output_video: Path, total_duration: float) -> bool:
         """Combine video footage and voiceover audio into clean 1080x1920 MP4 (strictly no subtitles)."""
@@ -218,20 +217,25 @@ $synth.Dispose()
                             break
 
             # Final render: stitch video + voiceover audio (no subtitles, pure clean video)
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "concat", "-safe", "0", "-i", str(concat_file),
-                "-i", str(audio_path),
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-b:a", "192k",
-                "-shortest",
-                str(output_video),
-            ]
-            res = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            return res.returncode == 0 and output_video.exists() and output_video.stat().st_size > 1000
+            for vcodec in ("h264_nvenc", "libx264", "mpeg4"):
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "concat", "-safe", "0", "-i", str(concat_file),
+                    "-i", str(audio_path),
+                    "-c:v", vcodec,
+                    "-pix_fmt", "yuv420p",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-shortest",
+                    str(output_video),
+                ]
+                try:
+                    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                    if res.returncode == 0 and output_video.exists() and output_video.stat().st_size > 1000:
+                        return True
+                except Exception as exc:
+                    logger.warning("Assemble video with %s failed: %s", vcodec, exc)
+            return False
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

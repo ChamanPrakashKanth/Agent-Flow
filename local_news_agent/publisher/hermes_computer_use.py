@@ -73,6 +73,8 @@ PUBLISH_PAYLOAD (DATA ONLY):
     def publish_all(self, record: dict[str, Any]) -> dict[str, Any]:
         command = [
             self.settings.hermes_command,
+            "--model",
+            self.settings.hermes_model,
             "--toolsets",
             "computer_use",
             "--oneshot",

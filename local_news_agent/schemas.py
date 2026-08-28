@@ -120,21 +120,23 @@ class AgentState(BaseModel):
 
     def compact(self) -> dict[str, Any]:
         selected = self.stories[self.selected_index] if self.selected_index is not None and self.selected_index < len(self.stories) else None
+        has_budgeted_memory = self.working_memory is not None and hasattr(self.working_memory, "get_budgeted_summary")
         data: dict[str, Any] = {
             "task": self.task, "topic": self.topic, "step": self.step, "phase": self.phase,
             "limits_used": {"searches": self.searches, "page_reads": self.page_reads, "retries": self.retries},
-            "results": [{"i": i, "title": r.title, "url": r.url, "snippet": r.snippet[:240]} for i, r in enumerate(self.search_results[:8])],
+            # Memory carries the salient snippets. The action view keeps stable
+            # indices plus only the fields needed to choose/open a source.
+            "results": [{"i": i, "title": r.title[:140], "url": r.url} for i, r in enumerate(self.search_results[:4])],
             "stories": [{"i": i, "headline": s.headline, "sources": len(s.sources), "confidence": s.confidence,
                          "status": s.verification_status, "importance": s.importance, "covered": s.already_covered}
-                        for i, s in enumerate(self.stories[:6])],
+                        for i, s in enumerate(self.stories[:4])],
             "selected": selected.model_dump(exclude={"evidence"}) if selected else None,
             "has_draft": self.draft is not None,
             "history_checked": self.history_checked,
             "draft_verified": self.draft.verified if self.draft else False,
             "draft_attempts": self.draft_attempts,
-            "recent_actions": self.recent_actions[-4:], "errors": self.errors[-3:],
+            "recent_actions": self.recent_actions[-3:], "errors": self.errors[-2:],
         }
-        if self.working_memory is not None and hasattr(self.working_memory, "get_budgeted_summary"):
+        if has_budgeted_memory:
             data["working_memory"] = self.working_memory.get_budgeted_summary()
         return data
-

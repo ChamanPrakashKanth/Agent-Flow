@@ -14,6 +14,8 @@ from local_news_agent.config import Settings
 settings = Settings.from_env()
 print("LOCAL NEWS AGENT HEALTH")
 print(f"Model: {settings.model_backend} / {settings.model_name}")
+print(f"KV Cache: {settings.ollama_kv_cache_type} (Flash Attention: {settings.ollama_flash_attention})")
+print(f"Working Memory: Budget={settings.memory_budget_nodes} nodes, Threshold={settings.memory_consolidation_threshold}")
 print(f"Publishing: {settings.publish_mode}; limit={settings.daily_publish_limit}")
 print(f"X: {settings.x_profile_url}")
 print(f"Threads: {settings.threads_profile_url}")

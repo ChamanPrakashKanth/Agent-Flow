@@ -9,10 +9,10 @@ from .scenarios import Scenario, scenarios
 
 
 LEVELS = {
-    "A": "Qwen 3B alone",
-    "B": "Qwen 3B + Hermes tools",
-    "C": "Qwen 3B + Hermes + structured planner",
-    "D": "Qwen 3B + Hermes + planner + verification",
+    "A": "Hermes 3 (Llama 3.2 3B) alone",
+    "B": "Hermes 3 (Llama 3.2 3B) + Hermes tools",
+    "C": "Hermes 3 (Llama 3.2 3B) + Hermes + structured planner",
+    "D": "Hermes 3 (Llama 3.2 3B) + Hermes + planner + verification",
     "E": "full architecture",
 }
 

@@ -1,5 +1,9 @@
 import json
+import sys
 from local_news_agent.config import Settings
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from local_news_agent.hermes.tools import DirectWebTools
 from local_news_agent.research.service import story_from_evidence
 from local_news_agent.writer.writer import write
@@ -25,7 +29,7 @@ evidence = tools.extract(best.url)
 story = story_from_evidence(best, evidence)
 print(f"Extracted {len(story.key_facts)} key facts from {evidence.canonical_origin}.")
 
-print("\n=== GENERATING VERIFIED DRAFTS WITH OLLAMA QWEN 2.5 CODER ===")
+print("\n=== GENERATING VERIFIED DRAFTS WITH OLLAMA HERMES 3 LLAMA 3.2 3B ===")
 model = LocalModel(s)
 state = AgentState(task="fresh_demo", topic="AI developer tools", run_id="fresh_live_demo")
 draft = write(model, story, state)

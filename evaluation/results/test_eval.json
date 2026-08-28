@@ -3,7 +3,7 @@
   "note": "Deterministic architecture benchmark; not a live-news or model-quality claim.",
   "levels": {
     "A": {
-      "name": "Qwen 3B alone",
+      "name": "Hermes 3 (Llama 3.2 3B) alone",
       "metrics": {
         "tasks": 30,
         "task_completion_pct": 53.3,
@@ -21,7 +21,7 @@
       }
     },
     "B": {
-      "name": "Qwen 3B + Hermes tools",
+      "name": "Hermes 3 (Llama 3.2 3B) + Hermes tools",
       "metrics": {
         "tasks": 30,
         "task_completion_pct": 80.0,
@@ -39,7 +39,7 @@
       }
     },
     "C": {
-      "name": "Qwen 3B + Hermes + structured planner",
+      "name": "Hermes 3 (Llama 3.2 3B) + Hermes + structured planner",
       "metrics": {
         "tasks": 30,
         "task_completion_pct": 90.0,
@@ -57,7 +57,7 @@
       }
     },
     "D": {
-      "name": "Qwen 3B + Hermes + planner + verification",
+      "name": "Hermes 3 (Llama 3.2 3B) + Hermes + planner + verification",
       "metrics": {
         "tasks": 30,
         "task_completion_pct": 90.0,

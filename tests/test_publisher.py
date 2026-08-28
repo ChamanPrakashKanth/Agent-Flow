@@ -124,8 +124,9 @@ def test_hermes_publisher_uses_only_computer_use_and_existing_profile(tmp_path: 
     with patch("local_news_agent.publisher.hermes_computer_use.subprocess.run", return_value=completed) as run:
         result = publisher.publish_all(record)
     command = run.call_args.args[0]
-    assert command[1:3] == ["--toolsets", "computer_use"]
-    assert command[3] == "--oneshot"
+    assert command[1:3] == ["--model", "hermes3:3b-hermes"]
+    assert command[3:5] == ["--toolsets", "computer_use"]
+    assert command[5] == "--oneshot"
     assert result["x"]["status"] == "FAILED"
 
 
@@ -144,3 +145,24 @@ def test_hermes_publisher_rejects_video_outside_shorts_directory(tmp_path: Path)
         assert "outside" in str(exc)
     else:
         raise AssertionError("outside video path was accepted")
+
+
+def test_direct_research_backend_does_not_bypass_hermes_publisher(tmp_path: Path):
+    settings = Settings(
+        publish_mode="AUTO",
+        tool_backend="direct",
+        queue_path=tmp_path / "queue.jsonl",
+        database_path=tmp_path / "agent.db",
+        trajectory_path=tmp_path / "trajectory.jsonl",
+        shorts_dir=tmp_path / "shorts",
+    )
+    _queue_verified(settings)
+    fake = {
+        "x": {"status": "POSTED", "url": "https://x.com/ChamanKant44703/status/123"},
+        "threads": {"status": "POSTED", "url": "https://www.threads.com/@chamanprakashkanth/post/ABC"},
+        "youtube": {"status": "PRIVATE", "url": "https://youtu.be/AbCdEf12345"},
+    }
+    with patch("local_news_agent.publisher.hermes_browser.HermesComputerUsePublisher.publish_all", return_value=fake) as hermes:
+        result = publish_one_due(settings)
+    assert result["status"] == "POSTED_AND_PRIVATE_UPLOADED"
+    hermes.assert_called_once()

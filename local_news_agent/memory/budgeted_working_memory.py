@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from hashlib import sha256
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -15,10 +16,19 @@ class Timescale(str, Enum):
 
 # Base alpha decay coefficients (higher = faster forgetting)
 ALPHA_MAP: dict[Timescale, float] = {
-    Timescale.SHORT: 0.50,
-    Timescale.MEDIUM: 0.15,
+    Timescale.SHORT: 0.75,
+    Timescale.MEDIUM: 0.30,
     Timescale.LONG: 0.02,
 }
+
+MAX_IMPORTANCE = 5.0
+MAX_ACCESS_COUNT = 20
+
+
+def stable_node_id(prefix: str, value: str) -> str:
+    """Return a deterministic, collision-resistant ID across Python processes."""
+    digest = sha256(value.strip().casefold().encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}_{digest}"
 
 
 @dataclass
@@ -43,7 +53,7 @@ class ConceptNode:
         """Compute learned retention score governed by Concept Importance I(c).
 
         Decay is a direct function of Concept Importance:
-            effective_alpha = (base_alpha / max(0.1, self.importance)) * (1.0 + 0.5 * max(0.0, pressure))
+            effective_alpha = (base_alpha / max(0.1, self.importance)) * (1.0 + 0.75 * max(0.0, pressure))
             R(c, Delta t) = importance * exp(-effective_alpha * Delta t) + beta * min(1.0, 0.25 * access_count)
 
         - High Concept Importance (I(c) >> 1, e.g. confirmed facts, primary evidence):
@@ -51,7 +61,7 @@ class ConceptNode:
         - Low Concept Importance (I(c) -> 0, e.g. ephemeral search scraps):
           effective_alpha is high, concept decays rapidly and gets evicted during consolidation.
         """
-        effective_alpha = (self.base_alpha / max(0.1, self.importance)) * (1.0 + 0.5 * max(0.0, pressure))
+        effective_alpha = (self.base_alpha / max(0.1, self.importance)) * (1.0 + 0.75 * max(0.0, pressure))
         delta_t = max(0, current_step - self.last_accessed_step)
         decay = self.importance * math.exp(-effective_alpha * delta_t)
         reinforcement = beta * min(1.0, 0.25 * self.access_count)
@@ -60,8 +70,8 @@ class ConceptNode:
     def reinforce(self, current_step: int, weight: int = 1) -> None:
         """Reinforce memory retention upon retrieval or verification."""
         self.last_accessed_step = current_step
-        self.access_count += weight
-        self.importance += 0.25 * weight
+        self.access_count = min(MAX_ACCESS_COUNT, self.access_count + max(0, weight))
+        self.importance = min(MAX_IMPORTANCE, self.importance + 0.25 * max(0, weight))
 
 
 
@@ -88,7 +98,9 @@ class ConceptGraph:
             # Propagate partial reinforcement to connected neighbors (GAT-inspired diffusion)
             for neighbor_id in self.edges.get(node_id, ()):
                 if neighbor_id in self.nodes:
-                    self.nodes[neighbor_id].last_accessed_step = current_step
+                    neighbor = self.nodes[neighbor_id]
+                    neighbor.last_accessed_step = current_step
+                    neighbor.importance = min(MAX_IMPORTANCE, neighbor.importance + 0.1 * max(0, weight))
 
     def neighbors(self, node_id: str) -> list[ConceptNode]:
         return [self.nodes[n_id] for n_id in self.edges.get(node_id, ()) if n_id in self.nodes]
@@ -106,9 +118,9 @@ class BudgetedWorkingMemory:
 
     def __init__(
         self,
-        budget_nodes: int = 12,
-        pressure_threshold: float = 0.75,
-        min_retention_threshold: float = 0.25,
+        budget_nodes: int = 8,
+        pressure_threshold: float = 0.60,
+        min_retention_threshold: float = 0.35,
     ) -> None:
         self.budget_nodes = max(4, budget_nodes)
         self.pressure_threshold = pressure_threshold
@@ -129,11 +141,11 @@ class BudgetedWorkingMemory:
 
     def ingest_search_result(self, title: str, snippet: str, url: str) -> str:
         """Ingest search item into short-timescale working memory."""
-        node_id = f"search_{abs(hash(url)) % 100000}"
+        node_id = stable_node_id("search", url)
         if node_id not in self.graph.nodes:
             node = ConceptNode(
                 id=node_id,
-                text=f"{title}: {snippet[:180]}",
+                text=f"{title}: {snippet[:140]}",
                 category="search_result",
                 timescale=Timescale.SHORT,
                 importance=0.6,
@@ -150,11 +162,11 @@ class BudgetedWorkingMemory:
 
     def ingest_story_candidate(self, headline: str, event: str, confidence: float, sources: list[str]) -> str:
         """Ingest candidate story into medium-timescale working memory."""
-        node_id = f"story_{abs(hash(headline)) % 100000}"
+        node_id = stable_node_id("story", headline)
         if node_id not in self.graph.nodes:
             node = ConceptNode(
                 id=node_id,
-                text=f"{headline} - {event[:200]}",
+                text=f"{headline} - {event[:160]}",
                 category="story_candidate",
                 timescale=Timescale.MEDIUM,
                 importance=max(1.0, float(confidence) * 1.5),
@@ -169,12 +181,44 @@ class BudgetedWorkingMemory:
         self.consolidate_if_needed()
         return node_id
 
+    def ingest_evidence_claim(self, headline: str, claim: str, sources: list[str]) -> str:
+        """Store a source claim without promoting it to a confirmed fact."""
+        node_id = stable_node_id("claim", claim)
+        if node_id not in self.graph.nodes:
+            node = ConceptNode(
+                id=node_id,
+                text=claim[:200],
+                category="evidence_claim",
+                timescale=Timescale.MEDIUM,
+                importance=0.9,
+                created_step=self.current_step,
+                last_accessed_step=self.current_step,
+                metadata={"headline": headline, "sources": list(dict.fromkeys(sources))},
+            )
+            self.graph.add_node(node)
+            self._link_related_nodes(node)
+        else:
+            node = self.graph.nodes[node_id]
+            node.metadata["sources"] = list(dict.fromkeys([*node.metadata.get("sources", []), *sources]))
+            self.graph.reinforce(node_id, self.current_step)
+        self.consolidate_if_needed()
+        return node_id
+
     def ingest_confirmed_fact(self, headline: str, fact: str, sources: list[str]) -> str:
         """Ingest verified/confirmed facts into long-timescale working memory."""
-        node_id = f"fact_{abs(hash(fact)) % 100000}"
+        node_id = stable_node_id("fact", fact)
+        if node_id in self.graph.nodes:
+            node = self.graph.nodes[node_id]
+            node.metadata["sources"] = list(dict.fromkeys([*node.metadata.get("sources", []), *sources]))
+            node.timescale = Timescale.LONG
+            node.base_alpha = ALPHA_MAP[Timescale.LONG]
+            node.category = "confirmed_fact"
+            self.graph.reinforce(node_id, self.current_step, weight=2)
+            self.consolidate_if_needed()
+            return node_id
         node = ConceptNode(
             id=node_id,
-            text=fact[:250],
+            text=fact[:200],
             category="confirmed_fact",
             timescale=Timescale.LONG,
             importance=2.5,
@@ -194,7 +238,7 @@ class BudgetedWorkingMemory:
             if headline.lower() in node.text.lower():
                 node.timescale = Timescale.LONG
                 node.base_alpha = ALPHA_MAP[Timescale.LONG]
-                node.importance += 1.5
+                node.importance = min(MAX_IMPORTANCE, node.importance + 1.5)
                 self.graph.reinforce(node.id, self.current_step, weight=4)
 
 
@@ -218,7 +262,6 @@ class BudgetedWorkingMemory:
         if self.pressure <= self.pressure_threshold:
             return False
 
-        self.total_consolidations += 1
         p = self.pressure
 
         # 1. Evaluate retention for all nodes
@@ -227,44 +270,33 @@ class BudgetedWorkingMemory:
             for node in list(self.graph.nodes.values())
         ]
 
-        # 2. Identify sub-threshold decayed nodes and consolidate them
-        decayed = [node for score, node in node_retention if score < self.min_retention_threshold]
-        if decayed:
-            cluster_text = " | ".join(node.text[:80] for node in decayed[:6])
-            concept_token = {
-                "token_id": f"c_mem_{self.total_consolidations}",
-                "summary": f"Decayed concepts ({len(decayed)} items): {cluster_text[:200]}",
-                "step": self.current_step,
-                "timescale": "CONSOLIDATED",
-            }
-            self.consolidated_tokens.append(concept_token)
-            self.consolidated_tokens = self.consolidated_tokens[-4:]
-            for node in decayed:
-                self.graph.remove_node(node.id)
+        # 2. Remove decayed nodes, then reduce to the configured pressure target.
+        # This avoids reporting repeated "consolidations" that removed nothing.
+        target_nodes = max(1, min(self.budget_nodes, math.floor(self.budget_nodes * self.pressure_threshold)))
+        removed: list[ConceptNode] = [node for score, node in node_retention if score < self.min_retention_threshold]
+        removed_ids = {node.id for node in removed}
+        survivors = [(score, node) for score, node in node_retention if node.id not in removed_ids]
+        survivors.sort(key=lambda item: (item[0], item[1].id), reverse=True)
+        overflow = [node for _, node in survivors[target_nodes:]]
+        for node in overflow:
+            if node.id not in removed_ids:
+                removed.append(node)
+                removed_ids.add(node.id)
 
-        # 3. If still over budget, consolidate remaining overflow into concept summaries
-        if len(self.graph.nodes) > self.budget_nodes:
-            active_scored = [
-                (node.retention(self.current_step, pressure=p), node)
-                for node in self.graph.nodes.values()
-            ]
-            active_scored.sort(key=lambda x: x[0], reverse=True)
+        if not removed:
+            return False
 
-            to_compress = [node for _, node in active_scored[self.budget_nodes:]]
-            if to_compress:
-                cluster_text = " | ".join(node.text[:80] for node in to_compress[:6])
-                concept_token = {
-                    "token_id": f"c_mem_{self.total_consolidations}_overflow",
-                    "summary": f"Consolidated concepts ({len(to_compress)} items): {cluster_text[:200]}",
-                    "step": self.current_step,
-                    "timescale": "CONSOLIDATED",
-                }
-                self.consolidated_tokens.append(concept_token)
-                self.consolidated_tokens = self.consolidated_tokens[-4:]
-
-                for node in to_compress:
-                    self.graph.remove_node(node.id)
-
+        self.total_consolidations += 1
+        cluster_text = " | ".join(f"[{node.category}] {node.text[:50]}" for node in removed[:4])
+        self.consolidated_tokens.append({
+            "token_id": f"c_mem_{self.total_consolidations}",
+            "summary": f"Compressed evidence concepts ({len(removed)} items): {cluster_text[:180]}",
+            "step": self.current_step,
+            "timescale": "CONSOLIDATED",
+        })
+        self.consolidated_tokens = self.consolidated_tokens[-2:]
+        for node in removed:
+            self.graph.remove_node(node.id)
         return True
 
 
@@ -275,7 +307,7 @@ class BudgetedWorkingMemory:
             {
                 "id": node.id,
                 "category": node.category,
-                "text": node.text[:140],
+                "text": node.text[:100],
                 "retention": round(node.retention(self.current_step, pressure=p), 2),
                 "timescale": node.timescale.value,
             }
@@ -283,7 +315,9 @@ class BudgetedWorkingMemory:
         ]
         scored_nodes.sort(key=lambda x: x["retention"], reverse=True)
         return {
-            "active_concepts": scored_nodes[: self.budget_nodes],
+            # Up to four high-retention concepts keep the planner prompt compact even
+            # when the internal graph budget is larger.
+            "active_concepts": scored_nodes[: min(self.budget_nodes, 4)],
             "consolidated_memories": self.consolidated_tokens[-2:],
             "memory_pressure": round(self.pressure, 2),
             "consolidations": self.total_consolidations,

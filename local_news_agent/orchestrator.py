@@ -20,9 +20,18 @@ class NewsAgent:
     def __init__(self, settings: Settings, planner: Planner, tools: NewsTools, memory: MemoryStore, publisher: Publisher, trajectories: TrajectoryLogger):
         self.s = settings; self.planner = planner; self.tools = tools; self.memory = memory; self.publisher = publisher; self.log = trajectories
         self.shorts = ShortsCreator(settings)
-        self.working_memory = BudgetedWorkingMemory(budget_nodes=settings.memory_budget_nodes, pressure_threshold=settings.memory_consolidation_threshold)
+        self.working_memory = self._new_working_memory()
+
+    def _new_working_memory(self) -> BudgetedWorkingMemory:
+        return BudgetedWorkingMemory(
+            budget_nodes=self.s.memory_budget_nodes,
+            pressure_threshold=self.s.memory_consolidation_threshold,
+        )
 
     def run(self, topic: str) -> AgentState:
+        # A run's step counter starts at zero, so its working memory must too.
+        # Persistent cross-run deduplication remains in MemoryStore/SQLite.
+        self.working_memory = self._new_working_memory()
         state = AgentState(task="research_current_news", topic=topic, run_id=uuid.uuid4().hex, working_memory=self.working_memory)
         seen_actions: dict[str, int] = {}
         while state.step < self.s.max_iterations and not state.final_result:
@@ -38,7 +47,7 @@ class NewsAgent:
                     if state.retries > self.s.max_retries: state.final_result = "NO_POST"
             state.step += 1; state.recent_actions.append(key)
             self.log.log(task=state.task, run_id=state.run_id, state=before, action=action.model_dump(mode="json"), tool=action.action,
-                         observation=str(observation)[:self.s.max_observation_chars], compressed_observation=str(observation)[:700], next_state=state.compact(), final_result=state.final_result or None, reward=None)
+                         observation=str(observation)[:self.s.max_observation_chars], compressed_observation=str(observation)[:400], next_state=state.compact(), final_result=state.final_result or None, reward=None)
         if not state.final_result: state.final_result = "NO_POST"; state.errors.append("iteration_limit")
         metrics = {"steps": state.step, "searches": state.searches, "page_reads": state.page_reads, "tool_calls": state.step,
                    "prompt_tokens": state.tokens_prompt, "completion_tokens": state.tokens_completion, "total_tokens": state.tokens_prompt+state.tokens_completion,
@@ -75,7 +84,7 @@ class NewsAgent:
                 s.stories.append(story)
                 self.working_memory.ingest_story_candidate(story.headline, story.event, story.confidence, story.sources)
             for claim in (ev.claims or [ev.excerpt[:200]]):
-                self.working_memory.ingest_confirmed_fact(s.search_results[i].title, claim, [ev.url])
+                self.working_memory.ingest_evidence_claim(s.search_results[i].title, claim, [ev.url])
             return f"evidence compressed: {len(ev.excerpt)} chars, {len(ev.claims)} claims"
         if a.action == ActionName.CROSS_CHECK:
             if not s.stories or s.searches >= self.s.max_searches: return "cannot cross-check"
@@ -86,8 +95,11 @@ class NewsAgent:
             if candidate and s.page_reads < self.s.max_page_reads:
                 ev = self.tools.extract(candidate.url); s.page_reads += 1; merge_evidence(story, ev)
                 for claim in (ev.claims or [ev.excerpt[:200]]):
-                    self.working_memory.ingest_confirmed_fact(story.headline, claim, [ev.url])
+                    self.working_memory.ingest_evidence_claim(story.headline, claim, [ev.url])
             verify_story(story)
+            if story.verification_status == VerificationStatus.CONFIRMED:
+                for fact in story.key_facts:
+                    self.working_memory.ingest_confirmed_fact(story.headline, fact, story.sources)
             self.working_memory.ingest_story_candidate(story.headline, story.event, story.confidence, story.sources)
             return f"{story.verification_status}; independent evidence={len(story.evidence)}"
         if a.action == ActionName.REJECT_STORY:
